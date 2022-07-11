@@ -1,0 +1,28 @@
+{
+  "mysql_host": "127.0.0.1",
+  "mysql_port": 3306,
+  "mysql_user": "root",
+  "mysql_pass": "root",
+  "kafka_host": "10.15.3.232",
+  "kafka_port": 9092,
+  "kafka_topic": "binlog",
+  "trace_log_dbs": "es_river",
+  "trace_log_tables": "",
+  "trace_log_show_all_field": false,
+  "trace_log_show_query_message": false,
+  "es_host": "127.0.0.1",
+  "es_port": 9200,
+  "es_user": "",
+  "es_pass": "",
+  "es_data_dir": "/sync",
+  "es_bulk_size": 4096,
+  "es_source": [],
+  "es_rule": [
+  ],
+  "es_flush_bulk_time": 30,
+  "es_skip_no_pk_table": true
+}
+
+
+
+

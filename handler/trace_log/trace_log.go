@@ -1,4 +1,4 @@
-package main
+package trace_log
 
 import (
 	"fmt"
@@ -6,7 +6,6 @@ import (
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
-	"github.com/pingcap/errors"
 	"reflect"
 	"runtime/debug"
 	"strings"
@@ -18,33 +17,17 @@ const (
 	SqlDeleteFormat = "\u001B[31mDELETE FROM\u001B[0m `%s`.`\u001B[30;46m%s\u001B[0m` \u001B[31mWHERE\u001B[0m %s LIMIT 1;"
 )
 
-type RiverHandler struct {
+type TraceLogHandler struct {
 	databases map[string]struct{}
 	tables    map[string]struct{}
 
-	more bool // more message in update sql
-	tx   bool // show transition msg in sql
+	showAllField     bool // showAllField message in update sql
+	showQueryMessage bool // show transition msg in sql
 
-	canal.DummyEventHandler
-	*canal.Canal
+	*canal.DummyEventHandler
 }
 
-func (r *RiverHandler) String() string {
-	return "river handler"
-}
-
-func NewRiver(addr string, user string, password string, databases []string, tables []string, moreMsg bool, tx bool) *RiverHandler {
-	cfg := canal.NewDefaultConfig()
-	cfg.Addr = addr
-	cfg.User = user
-	cfg.Password = password
-	cfg.Flavor = "mysql"
-	cfg.Dump.ExecutionPath = ""
-	c, err := canal.NewCanal(cfg)
-	if err != nil {
-		panic(err)
-	}
-
+func NewTraceLogHandler(databases, tables []string, showAllField, showQueryMessage bool) *TraceLogHandler {
 	ds := make(map[string]struct{}, len(databases))
 	ts := make(map[string]struct{}, len(tables))
 	for _, d := range databases {
@@ -53,43 +36,41 @@ func NewRiver(addr string, user string, password string, databases []string, tab
 	for _, t := range tables {
 		ts[strings.ToLower(t)] = struct{}{}
 	}
-	return &RiverHandler{Canal: c, databases: ds, tables: ts, more: moreMsg, tx: tx}
+	return &TraceLogHandler{
+		databases:         ds,
+		tables:            ts,
+		showAllField:      showAllField,
+		showQueryMessage:  showQueryMessage,
+		DummyEventHandler: new(canal.DummyEventHandler),
+	}
 }
 
-func (r *RiverHandler) Listen() error {
-	coords, err := r.GetMasterPos()
-	if err != nil {
-		return errors.Trace(err)
-	}
-	r.SetEventHandler(r)
-	if err := r.RunFrom(coords); err != nil {
-		return errors.Trace(err)
-	}
-	return nil
+func (t *TraceLogHandler) String() string {
+	return "trace log"
 }
 
-func (r *RiverHandler) OnDDL(nextPos mysql.Position, queryEvent *replication.QueryEvent) error {
-	if tx {
+func (t *TraceLogHandler) OnDDL(nextPos mysql.Position, queryEvent *replication.QueryEvent) error {
+	if t.showQueryMessage {
 		fmt.Printf("/* %s */", string(queryEvent.Query))
 	}
 	return nil
 }
 
-func (r *RiverHandler) OnXID(nextPos mysql.Position) error {
-	if tx {
+func (t *TraceLogHandler) OnXID(nextPos mysql.Position) error {
+	if t.showQueryMessage {
 		fmt.Println("/* XID */")
 	}
 	return nil
 }
 
-func (r *RiverHandler) OnGTID(gtid mysql.GTIDSet) error {
-	if tx {
+func (t *TraceLogHandler) OnGTID(gtid mysql.GTIDSet) error {
+	if t.showQueryMessage {
 		fmt.Printf("/* %s */", gtid.String())
 	}
 	return nil
 }
 
-func (r *RiverHandler) OnRow(e *canal.RowsEvent) error {
+func (t *TraceLogHandler) OnRow(e *canal.RowsEvent) error {
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Print(r, " ", string(debug.Stack()))
@@ -98,24 +79,24 @@ func (r *RiverHandler) OnRow(e *canal.RowsEvent) error {
 
 	var sql string
 
-	if len(r.databases) != 0 {
-		if _, ok := r.databases[e.Table.Schema]; !ok {
+	if len(t.databases) != 0 {
+		if _, ok := t.databases[e.Table.Schema]; !ok {
 			return nil
 		}
 	}
-	if len(r.tables) != 0 {
-		if _, ok := r.tables[e.Table.Name]; !ok {
+	if len(t.tables) != 0 {
+		if _, ok := t.tables[e.Table.Name]; !ok {
 			return nil
 		}
 	}
 
 	switch e.Action {
 	case canal.UpdateAction:
-		sql = genUpdateSql(e, r.more)
+		sql = GenUpdateSql(e, t.showAllField)
 	case canal.InsertAction:
-		sql = genInsertSql(e)
+		sql = GenInsertSql(e)
 	case canal.DeleteAction:
-		sql = genDeleteSql(e)
+		sql = GenDeleteSql(e)
 	}
 
 	fmt.Println(sql)
@@ -189,7 +170,7 @@ func buildUpdateSqlSimpleFieldsExp(columns []schema.TableColumn, whereFields []i
 	return res
 }
 
-func genUpdateSql(e *canal.RowsEvent, more bool) string {
+func GenUpdateSql(e *canal.RowsEvent, more bool) string {
 	whereFields := buildSqlFieldsExp(e.Table.Columns, e.Rows[0], true)
 	var setFields []string
 	if !more {
@@ -207,7 +188,7 @@ func genUpdateSql(e *canal.RowsEvent, more bool) string {
 	return content
 }
 
-func genInsertSql(e *canal.RowsEvent) string {
+func GenInsertSql(e *canal.RowsEvent) string {
 	fields := make([]string, len(e.Rows[0]))
 	values := make([]string, len(e.Rows[0]))
 	for idx, field := range e.Rows[0] {
@@ -224,7 +205,7 @@ func genInsertSql(e *canal.RowsEvent) string {
 	return content
 }
 
-func genDeleteSql(e *canal.RowsEvent) string {
+func GenDeleteSql(e *canal.RowsEvent) string {
 	fields := buildSqlFieldsExp(e.Table.Columns, e.Rows[0], true)
 	content := fmt.Sprintf(
 		SqlDeleteFormat,
