@@ -19,18 +19,14 @@ func main() {
 
 	showAllField := config.Bool("trace_log_show_all_field", false)
 	showQuery := config.Bool("trace_log_show_query_message", false)
-	databasesList := config.StringSlice("trace_log_dbs")
-	onlyTablesList := config.StringSlice("trace_log_tables")
+	dbs := config.StringSlice("trace_log_dbs")
 
-	for idx, v := range databasesList {
-		databasesList[idx] = strings.ToLower(strings.TrimSpace(v))
-	}
-	for idx, v := range onlyTablesList {
-		onlyTablesList[idx] = strings.ToLower(strings.TrimSpace(v))
+	for idx, v := range dbs {
+		dbs[idx] = strings.ToLower(strings.TrimSpace(v))
 	}
 
-	handler := trace_log.NewTraceLogHandler(databasesList, onlyTablesList, showAllField, showQuery)
-	err := river.NewDefaultRiver(addr, user, password, handler)
+	handler := trace_log.NewTraceLogHandler(dbs, showAllField, showQuery)
+	err := river.RunRiver(addr, user, password, handler)
 	if err != nil {
 		log.Fatal(errors.ErrorStack(err))
 	}

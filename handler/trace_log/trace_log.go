@@ -6,6 +6,7 @@ import (
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
+	"github.com/obgnail/mysql-river/handler/common"
 	"reflect"
 	"runtime/debug"
 	"strings"
@@ -15,30 +16,24 @@ const (
 	SqlInsertFormat = "\u001B[32mINSERT INTO\u001B[0m `%s`.`\u001B[30;46m%s\u001B[0m`(%s) \u001B[32mVALUES\u001B[0m (%s);"
 	SqlUpdateFormat = "\u001B[33mUPDATE\u001B[0m `%s`.`\u001B[30;46m%s\u001B[0m` \u001B[33mSET\u001B[0m %s \u001B[33mWHERE\u001B[0m %s LIMIT 1;"
 	SqlDeleteFormat = "\u001B[31mDELETE FROM\u001B[0m `%s`.`\u001B[30;46m%s\u001B[0m` \u001B[31mWHERE\u001B[0m %s LIMIT 1;"
+
+	SqlNormalInsertFormat = "INSERT INTO `%s`.`%s`(%s) VALUES (%s);"
+	SqlNormalUpdateFormat = "UPDATE `%s`.`%s` SET %s WHERE %s LIMIT 1;"
+	SqlNormalDeleteFormat = "DELETE FROM `%s`.`%s` WHERE %s LIMIT 1;"
 )
 
 type TraceLogHandler struct {
-	databases map[string]struct{}
-	tables    map[string]struct{}
+	dbs map[string]struct{}
 
-	showAllField     bool // showAllField message in update sql
+	showAllField     bool // show all field message in update sql
 	showQueryMessage bool // show transition msg in sql
 
 	*canal.DummyEventHandler
 }
 
-func NewTraceLogHandler(databases, tables []string, showAllField, showQueryMessage bool) *TraceLogHandler {
-	ds := make(map[string]struct{}, len(databases))
-	ts := make(map[string]struct{}, len(tables))
-	for _, d := range databases {
-		ds[strings.ToLower(d)] = struct{}{}
-	}
-	for _, t := range tables {
-		ts[strings.ToLower(t)] = struct{}{}
-	}
+func NewTraceLogHandler(dbs []string, showAllField, showQueryMessage bool) *TraceLogHandler {
 	return &TraceLogHandler{
-		databases:         ds,
-		tables:            ts,
+		dbs:               common.List2Map(dbs),
 		showAllField:      showAllField,
 		showQueryMessage:  showQueryMessage,
 		DummyEventHandler: new(canal.DummyEventHandler),
@@ -79,24 +74,19 @@ func (t *TraceLogHandler) OnRow(e *canal.RowsEvent) error {
 
 	var sql string
 
-	if len(t.databases) != 0 {
-		if _, ok := t.databases[e.Table.Schema]; !ok {
-			return nil
-		}
-	}
-	if len(t.tables) != 0 {
-		if _, ok := t.tables[e.Table.Name]; !ok {
+	if len(t.dbs) != 0 {
+		if _, ok := t.dbs[e.Table.Schema]; !ok {
 			return nil
 		}
 	}
 
 	switch e.Action {
 	case canal.UpdateAction:
-		sql = GenUpdateSql(e, t.showAllField)
+		sql = GenUpdateSql(e, true, t.showAllField)
 	case canal.InsertAction:
-		sql = GenInsertSql(e)
+		sql = GenInsertSql(e, true)
 	case canal.DeleteAction:
-		sql = GenDeleteSql(e)
+		sql = GenDeleteSql(e, true)
 	}
 
 	fmt.Println(sql)
@@ -170,16 +160,20 @@ func buildUpdateSqlSimpleFieldsExp(columns []schema.TableColumn, whereFields []i
 	return res
 }
 
-func GenUpdateSql(e *canal.RowsEvent, more bool) string {
-	whereFields := buildSqlFieldsExp(e.Table.Columns, e.Rows[0], true)
+func GenUpdateSql(e *canal.RowsEvent, highlight bool, more bool) string {
 	var setFields []string
 	if !more {
 		setFields = buildUpdateSqlSimpleFieldsExp(e.Table.Columns, e.Rows[0], e.Rows[1])
 	} else {
 		setFields = buildSqlFieldsExp(e.Table.Columns, e.Rows[1], false)
 	}
+	whereFields := buildSqlFieldsExp(e.Table.Columns, e.Rows[0], true)
+	formatter := SqlNormalUpdateFormat
+	if highlight {
+		formatter = SqlUpdateFormat
+	}
 	content := fmt.Sprintf(
-		SqlUpdateFormat,
+		formatter,
 		e.Table.Schema,
 		e.Table.Name,
 		strings.Join(setFields, ", "),
@@ -188,15 +182,19 @@ func GenUpdateSql(e *canal.RowsEvent, more bool) string {
 	return content
 }
 
-func GenInsertSql(e *canal.RowsEvent) string {
+func GenInsertSql(e *canal.RowsEvent, highlight bool) string {
 	fields := make([]string, len(e.Rows[0]))
 	values := make([]string, len(e.Rows[0]))
 	for idx, field := range e.Rows[0] {
 		fields[idx] = fmt.Sprintf("`%s`", e.Table.Columns[idx].Name)
 		values[idx] = buildSqlFieldValue(field)
 	}
+	formatter := SqlNormalInsertFormat
+	if highlight {
+		formatter = SqlInsertFormat
+	}
 	content := fmt.Sprintf(
-		SqlInsertFormat,
+		formatter,
 		e.Table.Schema,
 		e.Table.Name,
 		strings.Join(fields, ", "),
@@ -205,10 +203,14 @@ func GenInsertSql(e *canal.RowsEvent) string {
 	return content
 }
 
-func GenDeleteSql(e *canal.RowsEvent) string {
+func GenDeleteSql(e *canal.RowsEvent, highlight bool) string {
 	fields := buildSqlFieldsExp(e.Table.Columns, e.Rows[0], true)
+	formatter := SqlNormalDeleteFormat
+	if highlight {
+		formatter = SqlDeleteFormat
+	}
 	content := fmt.Sprintf(
-		SqlDeleteFormat,
+		formatter,
 		e.Table.Schema,
 		e.Table.Name,
 		strings.Join(fields, " AND "),

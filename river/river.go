@@ -6,7 +6,7 @@ import (
 	"github.com/juju/errors"
 )
 
-func NewRiver(addr string, user string, password string) (*canal.Canal, error) {
+func newRiver(addr string, user string, password string) (*canal.Canal, error) {
 	cfg := canal.NewDefaultConfig()
 	cfg.Addr = addr
 	cfg.User = user
@@ -21,8 +21,8 @@ func NewRiver(addr string, user string, password string) (*canal.Canal, error) {
 	return c, nil
 }
 
-func NewDefaultRiver(addr string, user string, password string, handler canal.EventHandler) error {
-	c, err := NewRiver(addr, user, password)
+func RunRiver(addr string, user string, password string, handler canal.EventHandler) error {
+	c, err := newRiver(addr, user, password)
 	if err != nil {
 		return errors.Trace(err)
 	}

@@ -9,29 +9,32 @@ import (
 	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/obgnail/mysql-river/handler/trace_log"
 	"runtime/debug"
-	"strings"
 )
 
 /*
 最终输出格式
 {
+	"server_id":"server_id1",
     "log_pos":"786",
     "db":"test",
     "table":"test1",
-    "query":"",
+    "sql":"UPDATE `testdb01`.`user` FROM (...);",
     "event_type":"update",
+	"gtid": "577b1aef-a03e-11eb-b217-0242ac110003:11",
+	"primary": ["uuid"],
     "before":{
         "id":2,
         "num":1,
         "strs":"wddd",
-        "times":"-0001-11-30 00:00:00"
+        "time":"2001-11-30 00:00:00"
     },
     "after":{
         "id":2,
         "num":1,
         "strs":"wddd",
-        "times":"2018-09-14 00:00:00"
-    }
+        "time":"2018-09-14 00:00:00"
+    },
+	"timestamp":"1675081632"
 }
 */
 type FormatData struct {
@@ -40,15 +43,15 @@ type FormatData struct {
 	Db        string                 `json:"db"`
 	Table     string                 `json:"table"`
 	SQL       string                 `json:"sql"`        // 主要用于 DDL event
-	EventType string                 `json:"event_type"` // 操作类型 insert、update、delete、ddl
+	EventType string                 `json:"event_type"` // 操作类型 insert、update、delete、ddl、gtid、xid
+	GTID      string                 `json:"gtid"`       // 存储gtid
 	Primary   []string               `json:"primary"`    // 主键字段；EventType非ddl时有值
 	Before    map[string]interface{} `json:"before"`     // 变更前数据, insert 类型的 before 为空
 	After     map[string]interface{} `json:"after"`      // 变更后数据, delete 类型的 after 为空
 	Timestamp uint32                 `json:"timestamp"`  // 事件时间
 }
 
-// 转换json
-func FormatEventDataJson(data *FormatData) ([]byte, error) {
+func ToBytes(data *FormatData) ([]byte, error) {
 	b, err := json.Marshal(data)
 	if err != nil {
 		return []byte{}, nil
@@ -56,37 +59,20 @@ func FormatEventDataJson(data *FormatData) ([]byte, error) {
 	return b, nil
 }
 
-func NewFormatDataFromDDL(nextPos mysql.Position, e *replication.QueryEvent) *FormatData {
-	d := &FormatData{
-		ServerID:  e.SlaveProxyID,
-		LogPos:    nextPos.Pos,
-		Db:        string(e.Schema),
-		Table:     "",
-		SQL:       string(e.Query),
-		EventType: "DDL",
-		Primary:   []string{},
-		Before:    make(map[string]interface{}),
-		After:     make(map[string]interface{}),
-		Timestamp: e.ExecutionTime,
-	}
-	return d
-}
-
-func NewFormatDataFromRow(e *canal.RowsEvent) *FormatData {
+func NewRowData(e *canal.RowsEvent, gtid string) *FormatData {
 	var sql string
 	before := make(map[string]interface{})
 	after := make(map[string]interface{})
-
 	switch e.Action {
 	case canal.UpdateAction:
-		sql = trace_log.GenUpdateSql(e, true)
+		sql = trace_log.GenUpdateSql(e, false, true)
 		before = buildFields(e.Table.Columns, e.Rows[0])
 		after = buildFields(e.Table.Columns, e.Rows[1])
 	case canal.InsertAction:
-		sql = trace_log.GenInsertSql(e)
+		sql = trace_log.GenInsertSql(e, false)
 		after = buildFields(e.Table.Columns, e.Rows[0])
 	case canal.DeleteAction:
-		sql = trace_log.GenDeleteSql(e)
+		sql = trace_log.GenDeleteSql(e, false)
 		before = buildFields(e.Table.Columns, e.Rows[0])
 	}
 
@@ -102,6 +88,7 @@ func NewFormatDataFromRow(e *canal.RowsEvent) *FormatData {
 		Table:     e.Table.Name,
 		SQL:       sql,
 		EventType: e.Action,
+		GTID:      gtid,
 		Primary:   primaryKey,
 		Before:    before,
 		After:     after,
@@ -110,27 +97,39 @@ func NewFormatDataFromRow(e *canal.RowsEvent) *FormatData {
 	return d
 }
 
-type KafkaHandler struct {
-	databases map[string]struct{}
-	tables    map[string]struct{}
+func NewDDLData(nextPos mysql.Position, e *replication.QueryEvent) *FormatData {
+	d := &FormatData{
+		ServerID:  e.SlaveProxyID,
+		LogPos:    nextPos.Pos,
+		Db:        string(e.Schema),
+		Table:     "",
+		SQL:       string(e.Query),
+		EventType: "ddl",
+		Primary:   []string{},
+		Before:    make(map[string]interface{}),
+		After:     make(map[string]interface{}),
+		Timestamp: e.ExecutionTime,
+	}
+	return d
+}
 
+func NewGTIDData(gtid mysql.GTIDSet) *FormatData {
+	d := &FormatData{EventType: "gtid", GTID: gtid.String()}
+	return d
+}
+
+func NewXIDData(nextPos mysql.Position) *FormatData {
+	d := &FormatData{EventType: "xid", LogPos: nextPos.Pos}
+	return d
+}
+
+type KafkaHandler struct {
+	currentGTID string
 	*canal.DummyEventHandler
 }
 
-func NewKafkaHandler(databases, tables []string, showAllField, showQueryMessage bool) *KafkaHandler {
-	ds := make(map[string]struct{}, len(databases))
-	ts := make(map[string]struct{}, len(tables))
-	for _, d := range databases {
-		ds[strings.ToLower(d)] = struct{}{}
-	}
-	for _, t := range tables {
-		ts[strings.ToLower(t)] = struct{}{}
-	}
-	return &KafkaHandler{
-		databases:         ds,
-		tables:            ts,
-		DummyEventHandler: new(canal.DummyEventHandler),
-	}
+func NewKafkaHandler() *KafkaHandler {
+	return &KafkaHandler{DummyEventHandler: new(canal.DummyEventHandler)}
 }
 
 func (h *KafkaHandler) String() string {
@@ -138,10 +137,24 @@ func (h *KafkaHandler) String() string {
 }
 
 func (h *KafkaHandler) OnDDL(nextPos mysql.Position, queryEvent *replication.QueryEvent) error {
-	d := NewFormatDataFromDDL(nextPos, queryEvent)
-	result, err := FormatEventDataJson(d)
+	d := NewDDLData(nextPos, queryEvent)
+	result, err := ToBytes(d)
+	fmt.Println(string(result), err)
+	return nil
+}
 
-	fmt.Println(result, err)
+func (h *KafkaHandler) OnGTID(gtid mysql.GTIDSet) error {
+	h.currentGTID = gtid.String()
+	d := NewGTIDData(gtid)
+	result, err := ToBytes(d)
+	fmt.Println(string(result), err)
+	return nil
+}
+
+func (h *KafkaHandler) OnXID(nextPos mysql.Position) error {
+	d := NewXIDData(nextPos)
+	result, err := ToBytes(d)
+	fmt.Println(string(result), err)
 	return nil
 }
 
@@ -152,21 +165,9 @@ func (h *KafkaHandler) OnRow(e *canal.RowsEvent) error {
 		}
 	}()
 
-	if len(h.databases) != 0 {
-		if _, ok := h.databases[e.Table.Schema]; !ok {
-			return nil
-		}
-	}
-	if len(h.tables) != 0 {
-		if _, ok := h.tables[e.Table.Name]; !ok {
-			return nil
-		}
-	}
-
-	d := NewFormatDataFromRow(e)
-	result, err := FormatEventDataJson(d)
-
-	fmt.Println(result, err)
+	d := NewRowData(e, h.currentGTID)
+	result, err := ToBytes(d)
+	fmt.Println(string(result), err)
 	return nil
 }
 
