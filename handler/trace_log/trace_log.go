@@ -6,7 +6,9 @@ import (
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
+	"github.com/juju/errors"
 	"github.com/obgnail/mysql-river/handler/common"
+	"github.com/obgnail/mysql-river/river"
 	"reflect"
 	"runtime/debug"
 	"strings"
@@ -216,4 +218,12 @@ func GenDeleteSql(e *canal.RowsEvent, highlight bool) string {
 		strings.Join(fields, " AND "),
 	)
 	return content
+}
+
+func RunTraceLogRiver(addr, user, password string, dbs []string, showAllField bool, showQueryMessage bool) error {
+	handler := NewTraceLogHandler(dbs, showAllField, showQueryMessage)
+	if err := river.RunRiver(addr, user, password, handler); err != nil {
+		return errors.Trace(err)
+	}
+	return nil
 }

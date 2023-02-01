@@ -7,18 +7,19 @@ import (
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
+	"github.com/juju/errors"
 	"github.com/obgnail/mysql-river/handler/trace_log"
+	"github.com/obgnail/mysql-river/river"
 	"runtime/debug"
 )
 
 /*
-最终输出格式
 {
 	"server_id":"server_id1",
     "log_pos":"786",
     "db":"test",
     "table":"test1",
-    "sql":"UPDATE `testdb01`.`user` FROM (...);",
+    "sql":"UPDATE `testdb01`.`user` SET (...);",
     "event_type":"update",
 	"gtid": "577b1aef-a03e-11eb-b217-0242ac110003:11",
 	"primary": ["uuid"],
@@ -178,4 +179,8 @@ func buildFields(columns []schema.TableColumn, fields []interface{}) map[string]
 		res[key] = field
 	}
 	return res
+}
+
+func RunKafkaRiver(addr, user, password string) error {
+	return errors.Trace(river.RunRiver(addr, user, password, NewKafkaHandler()))
 }

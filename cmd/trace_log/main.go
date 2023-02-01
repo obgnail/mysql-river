@@ -5,7 +5,6 @@ import (
 	"github.com/juju/errors"
 	"github.com/obgnail/mysql-river/config"
 	"github.com/obgnail/mysql-river/handler/trace_log"
-	"github.com/obgnail/mysql-river/river"
 	"log"
 	"strings"
 )
@@ -24,9 +23,7 @@ func main() {
 	for idx, v := range dbs {
 		dbs[idx] = strings.ToLower(strings.TrimSpace(v))
 	}
-
-	handler := trace_log.NewTraceLogHandler(dbs, showAllField, showQuery)
-	err := river.RunRiver(addr, user, password, handler)
+	err := trace_log.RunTraceLogRiver(addr, user, password, dbs, showAllField, showQuery)
 	if err != nil {
 		log.Fatal(errors.ErrorStack(err))
 	}
