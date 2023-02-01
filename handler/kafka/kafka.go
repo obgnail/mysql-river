@@ -3,13 +3,14 @@ package kafka
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/Shopify/sarama"
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/juju/errors"
+	"github.com/obgnail/mysql-river/config"
 	"github.com/obgnail/mysql-river/handler/trace_log"
-	"github.com/obgnail/mysql-river/river"
 	"runtime/debug"
 )
 
@@ -51,6 +52,12 @@ type FormatData struct {
 	After     map[string]interface{} `json:"after"`      // 变更后数据, delete 类型的 after 为空
 	Timestamp uint32                 `json:"timestamp"`  // 事件时间
 }
+
+const (
+	EventTypeDDL  = "ddl"
+	EventTypeGTID = "gtid"
+	EventTypeXID  = "xid"
+)
 
 func ToBytes(data *FormatData) ([]byte, error) {
 	b, err := json.Marshal(data)
@@ -105,7 +112,7 @@ func NewDDLData(nextPos mysql.Position, e *replication.QueryEvent) *FormatData {
 		Db:        string(e.Schema),
 		Table:     "",
 		SQL:       string(e.Query),
-		EventType: "ddl",
+		EventType: EventTypeDDL,
 		Primary:   []string{},
 		Before:    make(map[string]interface{}),
 		After:     make(map[string]interface{}),
@@ -115,47 +122,82 @@ func NewDDLData(nextPos mysql.Position, e *replication.QueryEvent) *FormatData {
 }
 
 func NewGTIDData(gtid mysql.GTIDSet) *FormatData {
-	d := &FormatData{EventType: "gtid", GTID: gtid.String()}
+	d := &FormatData{EventType: EventTypeGTID, GTID: gtid.String()}
 	return d
 }
 
 func NewXIDData(nextPos mysql.Position) *FormatData {
-	d := &FormatData{EventType: "xid", LogPos: nextPos.Pos}
+	d := &FormatData{EventType: EventTypeXID, LogPos: nextPos.Pos}
 	return d
 }
 
 type KafkaHandler struct {
 	currentGTID string
+	topic       string
+	addrs       []string
+	producer    sarama.SyncProducer
 	*canal.DummyEventHandler
 }
 
-func NewKafkaHandler() *KafkaHandler {
-	return &KafkaHandler{DummyEventHandler: new(canal.DummyEventHandler)}
+func New(addrs []string, topic string) (*KafkaHandler, error) {
+	producer, err := NewProducer(addrs)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	return &KafkaHandler{
+		addrs:             addrs,
+		topic:             topic,
+		producer:          producer,
+		DummyEventHandler: new(canal.DummyEventHandler),
+	}, nil
+}
+
+func NewFromConfig() (*KafkaHandler, error) {
+	kafka := config.Config.Kafka
+	return New(kafka.Addrs, kafka.Topic)
 }
 
 func (h *KafkaHandler) String() string {
 	return "kafka"
 }
 
+func (h *KafkaHandler) Send(data *FormatData) error {
+	result, err := ToBytes(data)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if _, _, err = SendMessage(h.producer, h.topic, result); err != nil {
+		return errors.Trace(err)
+	}
+	return nil
+}
+
+func (h *KafkaHandler) Consume(f func(msg *sarama.ConsumerMessage) error) error {
+	return Consume(h.addrs, h.topic, f)
+}
+
 func (h *KafkaHandler) OnDDL(nextPos mysql.Position, queryEvent *replication.QueryEvent) error {
 	d := NewDDLData(nextPos, queryEvent)
-	result, err := ToBytes(d)
-	fmt.Println(string(result), err)
+	if err := h.Send(d); err != nil {
+		return errors.Trace(err)
+	}
 	return nil
 }
 
 func (h *KafkaHandler) OnGTID(gtid mysql.GTIDSet) error {
 	h.currentGTID = gtid.String()
 	d := NewGTIDData(gtid)
-	result, err := ToBytes(d)
-	fmt.Println(string(result), err)
+	if err := h.Send(d); err != nil {
+		return errors.Trace(err)
+	}
 	return nil
 }
 
 func (h *KafkaHandler) OnXID(nextPos mysql.Position) error {
 	d := NewXIDData(nextPos)
-	result, err := ToBytes(d)
-	fmt.Println(string(result), err)
+	if err := h.Send(d); err != nil {
+		return errors.Trace(err)
+	}
 	return nil
 }
 
@@ -167,8 +209,9 @@ func (h *KafkaHandler) OnRow(e *canal.RowsEvent) error {
 	}()
 
 	d := NewRowData(e, h.currentGTID)
-	result, err := ToBytes(d)
-	fmt.Println(string(result), err)
+	if err := h.Send(d); err != nil {
+		return errors.Trace(err)
+	}
 	return nil
 }
 
@@ -179,8 +222,4 @@ func buildFields(columns []schema.TableColumn, fields []interface{}) map[string]
 		res[key] = field
 	}
 	return res
-}
-
-func RunKafkaRiver(addr, user, password string) error {
-	return errors.Trace(river.RunRiver(addr, user, password, NewKafkaHandler()))
 }

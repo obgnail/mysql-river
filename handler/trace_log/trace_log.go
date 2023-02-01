@@ -6,9 +6,7 @@ import (
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
-	"github.com/juju/errors"
-	"github.com/obgnail/mysql-river/handler/common"
-	"github.com/obgnail/mysql-river/river"
+	"github.com/obgnail/mysql-river/config"
 	"reflect"
 	"runtime/debug"
 	"strings"
@@ -24,21 +22,50 @@ const (
 	SqlNormalDeleteFormat = "DELETE FROM `%s`.`%s` WHERE %s LIMIT 1;"
 )
 
-type TraceLogHandler struct {
-	dbs map[string]struct{}
+const (
+	InvalidFormat = "[InvalidFieldValue]: '%v'"
+)
 
+type TraceLogHandler struct {
 	showAllField     bool // show all field message in update sql
 	showQueryMessage bool // show transition msg in sql
+	highlight        bool // sql highlight
+	dbs              map[string]struct{}
 
+	output chan string
 	*canal.DummyEventHandler
 }
 
-func NewTraceLogHandler(dbs []string, showAllField, showQueryMessage bool) *TraceLogHandler {
+func List2Map(slice []string) map[string]struct{} {
+	res := make(map[string]struct{})
+	for _, ele := range slice {
+		res[strings.ToLower(ele)] = struct{}{}
+	}
+	return res
+}
+
+func New(dbs []string, showAllField, showQueryMessage, highlight bool) *TraceLogHandler {
 	return &TraceLogHandler{
-		dbs:               common.List2Map(dbs),
+		dbs:               List2Map(dbs),
 		showAllField:      showAllField,
 		showQueryMessage:  showQueryMessage,
+		highlight:         highlight,
+		output:            make(chan string, 1024),
 		DummyEventHandler: new(canal.DummyEventHandler),
+	}
+}
+
+func NewFromConfig() *TraceLogHandler {
+	traceLog := config.Config.TraceLog
+	return New(traceLog.Dbs, traceLog.ShowAllField, traceLog.ShowQueryMessage, traceLog.Highlight)
+}
+
+func (t *TraceLogHandler) Send(sql string) {
+	t.output <- sql
+}
+func (t *TraceLogHandler) Consume(f func(sql string)) {
+	for sql := range t.output {
+		f(sql)
 	}
 }
 
@@ -48,21 +75,21 @@ func (t *TraceLogHandler) String() string {
 
 func (t *TraceLogHandler) OnDDL(nextPos mysql.Position, queryEvent *replication.QueryEvent) error {
 	if t.showQueryMessage {
-		fmt.Printf("/* %s */", string(queryEvent.Query))
+		t.Send(fmt.Sprintf("/* DDL: %s */", string(queryEvent.Query)))
 	}
 	return nil
 }
 
 func (t *TraceLogHandler) OnXID(nextPos mysql.Position) error {
 	if t.showQueryMessage {
-		fmt.Println("/* XID */")
+		t.Send(fmt.Sprintf("/* XID: %d */", nextPos.Pos))
 	}
 	return nil
 }
 
 func (t *TraceLogHandler) OnGTID(gtid mysql.GTIDSet) error {
 	if t.showQueryMessage {
-		fmt.Printf("/* %s */", gtid.String())
+		t.Send(fmt.Sprintf("/* %s */", gtid.String()))
 	}
 	return nil
 }
@@ -70,7 +97,7 @@ func (t *TraceLogHandler) OnGTID(gtid mysql.GTIDSet) error {
 func (t *TraceLogHandler) OnRow(e *canal.RowsEvent) error {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Print(r, " ", string(debug.Stack()))
+			t.Send(fmt.Sprintf("%+v %s", r, debug.Stack()))
 		}
 	}()
 
@@ -84,15 +111,13 @@ func (t *TraceLogHandler) OnRow(e *canal.RowsEvent) error {
 
 	switch e.Action {
 	case canal.UpdateAction:
-		sql = GenUpdateSql(e, true, t.showAllField)
+		sql = GenUpdateSql(e, t.highlight, t.showAllField)
 	case canal.InsertAction:
-		sql = GenInsertSql(e, true)
+		sql = GenInsertSql(e, t.highlight)
 	case canal.DeleteAction:
-		sql = GenDeleteSql(e, true)
+		sql = GenDeleteSql(e, t.highlight)
 	}
-
-	fmt.Println(sql)
-
+	t.Send(sql)
 	return nil
 }
 
@@ -116,17 +141,17 @@ func buildSqlFieldValue(value interface{}) string {
 	case reflect.Slice:
 		s, ok := reflect.ValueOf(value).Interface().([]byte)
 		if !ok {
-			return fmt.Sprintf("---Invalid---: '%v'", value)
+			return fmt.Sprintf(InvalidFormat, value)
 		}
 		return fmt.Sprintf("'%s'", string(s))
 	case reflect.Uintptr, reflect.Complex64, reflect.Complex128, reflect.Array, reflect.Chan,
 		reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Struct,
 		reflect.UnsafePointer:
-		return fmt.Sprintf("---Invalid---: '%v'", value)
+		return fmt.Sprintf(InvalidFormat, value)
 	case reflect.Invalid:
-		return fmt.Sprintf("---Invalid---: '%v'", value)
+		return fmt.Sprintf(InvalidFormat, value)
 	default:
-		return fmt.Sprintf("---Invalid---: '%v'", value)
+		return fmt.Sprintf(InvalidFormat, value)
 	}
 }
 
@@ -218,12 +243,4 @@ func GenDeleteSql(e *canal.RowsEvent, highlight bool) string {
 		strings.Join(fields, " AND "),
 	)
 	return content
-}
-
-func RunTraceLogRiver(addr, user, password string, dbs []string, showAllField bool, showQueryMessage bool) error {
-	handler := NewTraceLogHandler(dbs, showAllField, showQueryMessage)
-	if err := river.RunRiver(addr, user, password, handler); err != nil {
-		return errors.Trace(err)
-	}
-	return nil
 }

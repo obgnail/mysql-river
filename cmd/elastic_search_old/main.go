@@ -14,7 +14,7 @@ func main() {
 	password := config.String("mysql_pass", "root")
 	addr := fmt.Sprintf("%s:%d", host, port)
 
-	canal, err := river.RunRiver(addr, user, password)
+	canal, err := river.Run(addr, user, password)
 	if err != nil {
 		panic(err)
 	}

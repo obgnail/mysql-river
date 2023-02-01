@@ -4,11 +4,12 @@ import (
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/juju/errors"
+	"github.com/obgnail/mysql-river/config"
 )
 
-func newRiver(addr string, user string, password string) (*canal.Canal, error) {
+func NewCanal(host string, port int64, user string, password string) (*canal.Canal, error) {
 	cfg := canal.NewDefaultConfig()
-	cfg.Addr = addr
+	cfg.Addr = fmt.Sprintf("%s:%d", host, port)
 	cfg.User = user
 	cfg.Password = password
 	cfg.Flavor = "mysql"
@@ -21,11 +22,12 @@ func newRiver(addr string, user string, password string) (*canal.Canal, error) {
 	return c, nil
 }
 
-func RunRiver(addr string, user string, password string, handler canal.EventHandler) error {
-	c, err := newRiver(addr, user, password)
-	if err != nil {
-		return errors.Trace(err)
-	}
+func NewCanalFromConfig() (*canal.Canal, error) {
+	mySQL := config.Config.Mysql
+	return NewCanal(mySQL.Host, mySQL.Port, mySQL.User, mySQL.Password)
+}
+
+func Run(c *canal.Canal, handler canal.EventHandler) error {
 	coords, err := c.GetMasterPos()
 	if err != nil {
 		return errors.Trace(err)

@@ -1,32 +1,39 @@
 package config
 
-import "github.com/obgnail/mysql-river/handler/es_old"
+import (
+	"github.com/BurntSushi/toml"
+)
 
-type MySQLConfig struct {
-	MySQLHost     string `json:"mysql_host"`
-	MySQLPort     int64  `json:"mysql_port"`
-	MySQLUser     string `json:"mysql_user"`
-	MySQLPassword string `json:"mysql_pass"`
-}
-
-type TraceLogHandlerConfig struct {
-	Dbs              []string `json:"trace_log_dbs"`
-	Tables           []string `json:"trace_log_tables"`
-	ShowAllField     bool     `json:"trace_log_show_all_field"`
-	ShowQueryMessage bool     `json:"trace_log_show_query_message"`
-}
-
-type KafkaHandlerConfig struct {
-	KafkaHost  string `json:"kafka_host"`
-	KafkaPort  int64  `json:"kafka_port"`
-	KafkaTopic string `json:"kafka_topic"`
-}
+var Config RiverConfig
 
 type RiverConfig struct {
-	Mysql           *MySQLConfig
-	KafkaHandler    *KafkaHandlerConfig
-	TraceLogHandler *TraceLogHandlerConfig
-	ESHandler       *es_old.SyncESConfig
+	Mysql    *MySQL
+	TraceLog *TraceLog `toml:"trace_log"`
+	Kafka    *Kafka
+	//ESHandler   *es_old.SyncESConfig `toml:"es"`
 }
 
+type MySQL struct {
+	Host     string
+	Port     int64
+	User     string
+	Password string `toml:"pass"`
+}
 
+type TraceLog struct {
+	Dbs              []string
+	ShowAllField     bool
+	ShowQueryMessage bool
+	Highlight        bool
+}
+
+type Kafka struct {
+	Addrs []string
+	Topic string
+}
+
+func init() {
+	if _, err := toml.DecodeFile("config/config.toml", &Config); err != nil {
+		panic(err)
+	}
+}
