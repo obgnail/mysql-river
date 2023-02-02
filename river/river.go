@@ -196,7 +196,7 @@ func (r *River) OnTableChanged(header *replication.EventHeader, schema string, t
 	return nil
 }
 
-// 监听binlog日志的变化文件与记录的位置,不使用此函数,因为从master.info恢复时不会触发此函数
+// OnPosSynced 监听binlog日志的变化文件与记录的位置,不使用此函数,因为从master.info恢复时不会触发此函数
 func (r *River) OnPosSynced(header *replication.EventHeader, pos mysql.Position, set mysql.GTIDSet, force bool) error {
 	return nil
 }
@@ -249,8 +249,9 @@ func (r *River) RunFrom(from From) (err error) {
 		}
 	}
 
-	r.canal.SetEventHandler(r)
 	fmt.Println(logo)
+
+	r.canal.SetEventHandler(r)
 	if err := r.canal.RunFrom(start); err != nil {
 		return errors.Trace(err)
 	}
@@ -286,10 +287,12 @@ func buildFields(columns []schema.TableColumn, fields []interface{}) map[string]
 }
 
 const logo = `
- __    __     __  __     ______     ______     __         ______     __     __   __   ______     ______    
-/\ "-./  \   /\ \_\ \   /\  ___\   /\  __ \   /\ \       /\  == \   /\ \   /\ \ / /  /\  ___\   /\  == \   
-\ \ \-./\ \  \ \____ \  \ \___  \  \ \ \/\_\  \ \ \____  \ \  __<   \ \ \  \ \ \'/   \ \  __\   \ \  __<   
- \ \_\ \ \_\  \/\_____\  \/\_____\  \ \___\_\  \ \_____\  \ \_\ \_\  \ \_\  \ \__|    \ \_____\  \ \_\ \_\ 
-  \/_/  \/_/   \/_____/   \/_____/   \/___/_/   \/_____/   \/_/ /_/   \/_/   \/_/      \/_____/   \/_/ /_/ 
-                                                                                                          
+
+███╗   ███╗██╗   ██╗███████╗ ██████╗ ██╗         ██████╗ ██╗██╗   ██╗███████╗██████╗ 
+████╗ ████║╚██╗ ██╔╝██╔════╝██╔═══██╗██║         ██╔══██╗██║██║   ██║██╔════╝██╔══██╗
+██╔████╔██║ ╚████╔╝ ███████╗██║   ██║██║         ██████╔╝██║██║   ██║█████╗  ██████╔╝
+██║╚██╔╝██║  ╚██╔╝  ╚════██║██║▄▄ ██║██║         ██╔══██╗██║╚██╗ ██╔╝██╔══╝  ██╔══██╗
+██║ ╚═╝ ██║   ██║   ███████║╚██████╔╝███████╗    ██║  ██║██║ ╚████╔╝ ███████╗██║  ██║
+╚═╝     ╚═╝   ╚═╝   ╚══════╝ ╚══▀▀═╝ ╚══════╝    ╚═╝  ╚═╝╚═╝  ╚═══╝  ╚══════╝╚═╝  ╚═╝
+
 `
