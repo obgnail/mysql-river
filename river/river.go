@@ -202,7 +202,7 @@ func (r *River) OnPosSynced(header *replication.EventHeader, pos mysql.Position,
 }
 
 func (r *River) rangeEvent(handler EventHandler) {
-	ticker := time.NewTicker(defaultSaveInterval)
+	ticker := time.NewTicker(r.masterInfo.saveInterval)
 	defer ticker.Stop()
 
 	binlogName, binlogPas := r.masterInfo.Name, r.masterInfo.Pos
