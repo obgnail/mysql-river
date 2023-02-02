@@ -1,10 +1,10 @@
-package es_old
+package es
 
 import (
 	"encoding/json"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/mysql"
-	"github.com/pingcap/errors"
+	"github.com/juju/errors"
 	"io"
 	"io/ioutil"
 	"os"
@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	fileName        = "masterInfo.info"
+	fileName        = "master.info"
 	saveMinDuration = time.Second
 )
 

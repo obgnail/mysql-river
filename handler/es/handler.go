@@ -1,4 +1,4 @@
-package es_old
+package es
 
 import (
 	"bytes"
@@ -8,7 +8,7 @@ import (
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
-	"github.com/pingcap/errors"
+	"github.com/juju/errors"
 	"log"
 	"reflect"
 	"strings"
@@ -60,7 +60,7 @@ type SyncESHandler struct {
 
 	masterInfo *MasterInfo // 记录解析到哪里了
 
-	syncChan chan interface{} // posSaver /
+	syncChan chan interface{} // posSaver
 	exitChan chan struct{}
 }
 
@@ -162,7 +162,7 @@ func (s *SyncESHandler) OnRow(e *canal.RowsEvent) error {
 }
 
 func (s *SyncESHandler) String() string {
-	return "sync es"
+	return "sync es_new"
 }
 
 func (s *SyncESHandler) Position() mysql.Position {
@@ -524,7 +524,7 @@ func (s *SyncESHandler) getDocID(rule *Rule, row []interface{}) (string, error) 
 	return buf.String(), nil
 }
 
-// get mysql field value and convert it to specific value to es
+// get mysql field value and convert it to specific value to es_new
 func (s *SyncESHandler) getFieldValue(col *schema.TableColumn, fieldType string, value interface{}) interface{} {
 	var fieldValue interface{}
 	switch fieldType {

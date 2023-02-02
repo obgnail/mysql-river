@@ -2,6 +2,7 @@ package config
 
 import (
 	"github.com/BurntSushi/toml"
+	"github.com/obgnail/mysql-river/handler/es"
 )
 
 var Config RiverConfig
@@ -10,7 +11,7 @@ type RiverConfig struct {
 	Mysql    *MySQL
 	TraceLog *TraceLog `toml:"trace_log"`
 	Kafka    *Kafka
-	//ESHandler   *es_old.SyncESConfig `toml:"es"`
+	ES       *es.SyncESConfig `toml:"elasticsearch"`
 }
 
 type MySQL struct {

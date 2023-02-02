@@ -14,7 +14,7 @@ show_all_field = false
 show_query_message = false
 highlight = false
 
-[es]
+[elasticsearch]
 host = "127.0.0.1"
 port = 9200
 user = ""

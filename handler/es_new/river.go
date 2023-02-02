@@ -1,4 +1,4 @@
-package es
+package es_new
 
 import (
 	"context"
@@ -10,8 +10,8 @@ import (
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/juju/errors"
 
-	"github.com/obgnail/mysql-river/handler/es/elastic"
 	"github.com/go-mysql-org/go-mysql/mysql"
+	"github.com/obgnail/mysql-river/handler/es_new/elastic"
 )
 
 var ErrRuleNotExist = errors.New("rule is not exist")
@@ -299,11 +299,11 @@ func (r *River) Run() error {
 	} else {
 		gset, err := mysql.ParseGTIDSet(mysql.MySQLFlavor, gtidset)
 		if err != nil {
-			log.Printf("[err] invalid GTID set '%s': %v", gtidset, err)
+			log.Printf("[err] invalid gtidSet set '%s': %v", gtidset, err)
 			return errors.Trace(err)
 		}
 		if err = r.canal.StartFromGTID(gset); err != nil {
-			log.Printf("[err] start canal from GTID set '%s' err: %v", gtidset, err)
+			log.Printf("[err] start canal from gtidSet set '%s' err: %v", gtidset, err)
 			return errors.Trace(err)
 		}
 	}

@@ -8,7 +8,6 @@ require (
 	github.com/Shopify/sarama v1.37.0
 	github.com/go-mysql-org/go-mysql v1.6.0
 	github.com/juju/errors v0.0.0-20210818161939-5560c4c073ff
-	github.com/pingcap/errors v0.11.5-0.20201126102027-b0a155152ca3
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
 )
 
@@ -32,6 +31,7 @@ require (
 	github.com/kr/pretty v0.3.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.17 // indirect
+	github.com/pingcap/errors v0.11.5-0.20201126102027-b0a155152ca3 // indirect
 	github.com/pingcap/log v0.0.0-20210317133921-96f4fcab92a4 // indirect
 	github.com/pingcap/parser v0.0.0-20210415081931-48e7f467fd74 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475 // indirect

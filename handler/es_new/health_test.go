@@ -1,4 +1,4 @@
-package es
+package es_new
 
 import (
 	"fmt"
@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/go-mysql-org/go-mysql/client"
-	. "gopkg.in/check.v1"
 )
 
 func (s *riverTestSuite) setupHealth(c *C) (r *River) {

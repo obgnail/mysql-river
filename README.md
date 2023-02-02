@@ -4,7 +4,7 @@
 
 - trace log：将 binlog 实时翻译为 sql 语句。
 - Elastic search sync：将 binlog 的数据同步到 es 中。
-- Kafka broker（WIP）：将 binlog 的数据同步到 Kafka 中，和 MySQL 彻底解耦。
+- Kafka broker：将 binlog 的数据同步到 Kafka 中，和 MySQL 彻底解耦。
 
 
 
@@ -201,7 +201,8 @@ type FormatData struct {
 	Db        string                 `json:"db"`
 	Table     string                 `json:"table"`
 	SQL       string                 `json:"sql"`        // 主要用于 DDL event
-	EventType string                 `json:"event_type"` // 操作类型 insert、update、delete、ddl
+	EventType string                 `json:"event_type"` // 操作类型 insert、update、delete、ddl、gtid、xid
+	GTID      string                 `json:"gtid"`       // 存储gtid
 	Primary   []string               `json:"primary"`    // 主键字段；EventType非ddl时有值
 	Before    map[string]interface{} `json:"before"`     // 变更前数据, insert 类型的 before 为空
 	After     map[string]interface{} `json:"after"`      // 变更后数据, delete 类型的 after 为空

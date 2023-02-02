@@ -1,4 +1,4 @@
-package es
+package es_new
 
 import (
 	"flag"
@@ -9,8 +9,7 @@ import (
 	"time"
 
 	"github.com/go-mysql-org/go-mysql/client"
-	"github.com/obgnail/mysql-river/handler/es/elastic"
-	. "gopkg.in/check.v1"
+	"github.com/obgnail/mysql-river/handler/es_new/elastic"
 )
 
 var myAddr = flag.String("my_addr", "127.0.0.1:3306", "MySQL addr for normal test")

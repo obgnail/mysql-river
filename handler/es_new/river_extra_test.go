@@ -1,4 +1,4 @@
-package es
+package es_new
 
 import (
 	"fmt"
@@ -6,8 +6,6 @@ import (
 	"net/url"
 	"os"
 	"time"
-
-	. "gopkg.in/check.v1"
 )
 
 func (s *riverTestSuite) setupExtra(c *C) (r *River) {

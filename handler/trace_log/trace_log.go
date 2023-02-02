@@ -2,13 +2,8 @@ package trace_log
 
 import (
 	"fmt"
-	"github.com/go-mysql-org/go-mysql/canal"
-	"github.com/go-mysql-org/go-mysql/mysql"
-	"github.com/go-mysql-org/go-mysql/replication"
-	"github.com/go-mysql-org/go-mysql/schema"
-	"github.com/obgnail/mysql-river/config"
+	"github.com/obgnail/mysql-river/river"
 	"reflect"
-	"runtime/debug"
 	"strings"
 )
 
@@ -31,12 +26,9 @@ type TraceLogHandler struct {
 	showQueryMessage bool // show transition msg in sql
 	highlight        bool // sql highlight
 	dbs              map[string]struct{}
-
-	output chan string
-	*canal.DummyEventHandler
 }
 
-func List2Map(slice []string) map[string]struct{} {
+func list2Map(slice []string) map[string]struct{} {
 	res := make(map[string]struct{})
 	for _, ele := range slice {
 		res[strings.ToLower(ele)] = struct{}{}
@@ -46,26 +38,10 @@ func List2Map(slice []string) map[string]struct{} {
 
 func New(dbs []string, showAllField, showQueryMessage, highlight bool) *TraceLogHandler {
 	return &TraceLogHandler{
-		dbs:               List2Map(dbs),
-		showAllField:      showAllField,
-		showQueryMessage:  showQueryMessage,
-		highlight:         highlight,
-		output:            make(chan string, 1024),
-		DummyEventHandler: new(canal.DummyEventHandler),
-	}
-}
-
-func NewFromConfig() *TraceLogHandler {
-	traceLog := config.Config.TraceLog
-	return New(traceLog.Dbs, traceLog.ShowAllField, traceLog.ShowQueryMessage, traceLog.Highlight)
-}
-
-func (t *TraceLogHandler) Send(sql string) {
-	t.output <- sql
-}
-func (t *TraceLogHandler) Consume(f func(sql string)) {
-	for sql := range t.output {
-		f(sql)
+		dbs:              list2Map(dbs),
+		showAllField:     showAllField,
+		showQueryMessage: showQueryMessage,
+		highlight:        highlight,
 	}
 }
 
@@ -73,52 +49,104 @@ func (t *TraceLogHandler) String() string {
 	return "trace log"
 }
 
-func (t *TraceLogHandler) OnDDL(nextPos mysql.Position, queryEvent *replication.QueryEvent) error {
-	if t.showQueryMessage {
-		t.Send(fmt.Sprintf("/* DDL: %s */", string(queryEvent.Query)))
+func (t *TraceLogHandler) Show(event *river.EventData) error {
+	var data string
+	switch event.EventType {
+	case river.EventTypeUpdate, river.EventTypeInsert, river.EventTypeDelete:
+		data = t.handlerRow(event)
+	case river.EventTypeGTID:
+		data = fmt.Sprintf("/* GTID: %s */", event.GTIDSet)
+	case river.EventTypeXID:
+		data = fmt.Sprintf("/* XID: %s */", event.Position())
+	case river.EventTypeDDL:
+		data = event.SQL
+	}
+	if len(data) != 0 {
+		fmt.Println(data)
 	}
 	return nil
 }
 
-func (t *TraceLogHandler) OnXID(nextPos mysql.Position) error {
-	if t.showQueryMessage {
-		t.Send(fmt.Sprintf("/* XID: %d */", nextPos.Pos))
-	}
-	return nil
-}
-
-func (t *TraceLogHandler) OnGTID(gtid mysql.GTIDSet) error {
-	if t.showQueryMessage {
-		t.Send(fmt.Sprintf("/* %s */", gtid.String()))
-	}
-	return nil
-}
-
-func (t *TraceLogHandler) OnRow(e *canal.RowsEvent) error {
-	defer func() {
-		if r := recover(); r != nil {
-			t.Send(fmt.Sprintf("%+v %s", r, debug.Stack()))
-		}
-	}()
-
-	var sql string
-
+func (t *TraceLogHandler) handlerRow(event *river.EventData) (sql string) {
 	if len(t.dbs) != 0 {
-		if _, ok := t.dbs[e.Table.Schema]; !ok {
-			return nil
+		if _, ok := t.dbs[event.Db]; !ok {
+			return ""
 		}
 	}
 
-	switch e.Action {
-	case canal.UpdateAction:
-		sql = GenUpdateSql(e, t.highlight, t.showAllField)
-	case canal.InsertAction:
-		sql = GenInsertSql(e, t.highlight)
-	case canal.DeleteAction:
-		sql = GenDeleteSql(e, t.highlight)
+	switch event.EventType {
+	case river.EventTypeUpdate:
+		sql = GenUpdateSql(event, t.highlight, t.showAllField)
+	case river.EventTypeInsert:
+		sql = GenInsertSql(event, t.highlight)
+	case river.EventTypeDelete:
+		sql = GenDeleteSql(event, t.highlight)
 	}
-	t.Send(sql)
-	return nil
+	return
+}
+
+func map2list(kv map[string]interface{}) (fields []string, values []string) {
+	for filed, value := range kv {
+		fields = append(fields, fmt.Sprintf("`%s`", filed))
+		values = append(values, buildSqlFieldValue(value))
+	}
+	return
+}
+
+func GenUpdateSql(event *river.EventData, highlight bool, more bool) string {
+	var setFields []string
+	if !more {
+		setFields = buildUpdateSqlSimpleFieldsExp(event.Before, event.After)
+	} else {
+		setFields = buildSqlFieldsExp(event.After, false)
+	}
+	whereFields := buildSqlFieldsExp(event.Before, true)
+
+	formatter := SqlNormalUpdateFormat
+	if highlight {
+		formatter = SqlUpdateFormat
+	}
+	content := fmt.Sprintf(
+		formatter,
+		event.Db,
+		event.Table,
+		strings.Join(setFields, ", "),
+		strings.Join(whereFields, " AND "),
+	)
+	return content
+}
+
+func GenInsertSql(event *river.EventData, highlight bool) string {
+	fields, values := map2list(event.After)
+
+	formatter := SqlNormalInsertFormat
+	if highlight {
+		formatter = SqlInsertFormat
+	}
+	content := fmt.Sprintf(
+		formatter,
+		event.Db,
+		event.Table,
+		strings.Join(fields, ", "),
+		strings.Join(values, ", "),
+	)
+	return content
+}
+
+func GenDeleteSql(event *river.EventData, highlight bool) string {
+	kv := buildSqlFieldsExp(event.Before, true)
+
+	formatter := SqlNormalDeleteFormat
+	if highlight {
+		formatter = SqlDeleteFormat
+	}
+	content := fmt.Sprintf(
+		formatter,
+		event.Db,
+		event.Table,
+		strings.Join(kv, " AND "),
+	)
+	return content
 }
 
 func buildSqlFieldValue(value interface{}) string {
@@ -155,6 +183,15 @@ func buildSqlFieldValue(value interface{}) string {
 	}
 }
 
+func buildSqlFieldsExp(kv map[string]interface{}, inWhere bool) []string {
+	var res []string
+	for field, value := range kv {
+		valueStr := buildSqlFieldValue(value)
+		res = append(res, buildEqualExp(field, valueStr, inWhere))
+	}
+	return res
+}
+
 func buildEqualExp(key, value string, inWhere bool) string {
 	// if v is NULL, may need to process
 	if inWhere && value == "NULL" {
@@ -164,83 +201,14 @@ func buildEqualExp(key, value string, inWhere bool) string {
 	return fmt.Sprintf("`%s`=%s", key, value)
 }
 
-func buildSqlFieldsExp(columns []schema.TableColumn, fields []interface{}, inWhere bool) []string {
-	res := make([]string, len(fields))
-	for idx, field := range fields {
-		key := columns[idx].Name
-		value := buildSqlFieldValue(field)
-		res[idx] = buildEqualExp(key, value, inWhere)
-	}
-	return res
-}
-
-func buildUpdateSqlSimpleFieldsExp(columns []schema.TableColumn, whereFields []interface{}, setFields []interface{}) []string {
+func buildUpdateSqlSimpleFieldsExp(before, after map[string]interface{}) []string {
 	var res []string
-	for idx, col := range columns {
-		where := buildSqlFieldValue(whereFields[idx])
-		set := buildSqlFieldValue(setFields[idx])
-		if reflect.DeepEqual(where, set) {
-			continue
+	for field, value := range after {
+		afterValue := buildSqlFieldValue(value)
+		beforeValue := buildSqlFieldValue(before[field])
+		if beforeValue != afterValue {
+			res = append(res, buildEqualExp(field, afterValue, false))
 		}
-		res = append(res, buildEqualExp(col.Name, set, false))
 	}
 	return res
-}
-
-func GenUpdateSql(e *canal.RowsEvent, highlight bool, more bool) string {
-	var setFields []string
-	if !more {
-		setFields = buildUpdateSqlSimpleFieldsExp(e.Table.Columns, e.Rows[0], e.Rows[1])
-	} else {
-		setFields = buildSqlFieldsExp(e.Table.Columns, e.Rows[1], false)
-	}
-	whereFields := buildSqlFieldsExp(e.Table.Columns, e.Rows[0], true)
-	formatter := SqlNormalUpdateFormat
-	if highlight {
-		formatter = SqlUpdateFormat
-	}
-	content := fmt.Sprintf(
-		formatter,
-		e.Table.Schema,
-		e.Table.Name,
-		strings.Join(setFields, ", "),
-		strings.Join(whereFields, " AND "),
-	)
-	return content
-}
-
-func GenInsertSql(e *canal.RowsEvent, highlight bool) string {
-	fields := make([]string, len(e.Rows[0]))
-	values := make([]string, len(e.Rows[0]))
-	for idx, field := range e.Rows[0] {
-		fields[idx] = fmt.Sprintf("`%s`", e.Table.Columns[idx].Name)
-		values[idx] = buildSqlFieldValue(field)
-	}
-	formatter := SqlNormalInsertFormat
-	if highlight {
-		formatter = SqlInsertFormat
-	}
-	content := fmt.Sprintf(
-		formatter,
-		e.Table.Schema,
-		e.Table.Name,
-		strings.Join(fields, ", "),
-		strings.Join(values, ", "),
-	)
-	return content
-}
-
-func GenDeleteSql(e *canal.RowsEvent, highlight bool) string {
-	fields := buildSqlFieldsExp(e.Table.Columns, e.Rows[0], true)
-	formatter := SqlNormalDeleteFormat
-	if highlight {
-		formatter = SqlDeleteFormat
-	}
-	content := fmt.Sprintf(
-		formatter,
-		e.Table.Schema,
-		e.Table.Name,
-		strings.Join(fields, " AND "),
-	)
-	return content
 }

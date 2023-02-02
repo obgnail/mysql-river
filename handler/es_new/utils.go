@@ -1,11 +1,11 @@
-package es
+package es_new
 
 import (
 	"bytes"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/juju/errors"
 	"github.com/go-mysql-org/go-mysql/mysql"
+	"github.com/juju/errors"
 )
 
 func HtmlStrip(input interface{}) (string, error) {

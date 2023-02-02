@@ -1,4 +1,4 @@
-package es
+package es_new
 
 import (
 	"io/ioutil"
@@ -61,4 +61,3 @@ func NewConfig(data string) (*Config, error) {
 
 	return &c, nil
 }
-

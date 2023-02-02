@@ -1,99 +1,72 @@
 package es
 
 import (
-	"github.com/obgnail/mysql-river/handler/es/elastic"
+	"fmt"
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-mysql-org/go-mysql/schema"
+	"github.com/juju/errors"
+	"strings"
 )
 
-// If you want to sync MySQL data into elasticsearch, you must set a rule to let use know how to do it.
-// The mapping rule may thi: schema + table <-> index + document type.
-// schema and table is for MySQL, index and document type is for Elasticsearch.
 type Rule struct {
-	Schema string `toml:"schema"`
-	Table  string `toml:"table"`
-	Index  string `toml:"index"`
-	Type   string `toml:"type"`
-	Parent string `toml:"parent"`
+	Schema string   `json:"schema"`
+	Table  string   `json:"table"`
+	Index  string   `json:"index"`
+	Type   string   `json:"type"`
+	Parent string   `json:"parent"`
+	ID     []string `json:"id"`
 
-	IDColumns        string `toml:"id_columns"`
-	HtmlStripColumns string `toml:"html_strip_columns"`
-	JSONColumns      string `toml:"json_columns"`
 	// Default, a MySQL table field name is mapped to Elasticsearch field name.
 	// Sometimes, you want to use different name, e.g, the MySQL file name is title,
 	// but in Elasticsearch, you want to name it my_title.
-	FieldMapping map[string]string `toml:"field"`
+	FieldMapping map[string]string `json:"field_mapping"`
 
 	// MySQL table information
 	TableInfo *schema.Table
 
-	CustomActionMapping []*ActionMapping `toml:"action"`
+	//only MySQL fields in filter will be synced , default sync all fields
+	Filter []string `json:"filter"`
 
-	ActionMapping map[string]*ActionMapping
+	// Elasticsearch pipeline
+	// To pre-process documents before indexing
+	Pipeline string `json:"pipeline"`
 }
 
-type ActionMapping struct {
-	DBAction       string `toml:"db_action"`
-	ESAction       string `toml:"es_action"`
-	Script         string `toml:"script"`
-	ScriptFile     string `toml:"script_file"`
-	ScriptedUpsert bool   `toml:"scripted_upsert"`
+func RuleKey(schema string, table string) string {
+	return strings.ToLower(fmt.Sprintf("%s:%s", schema, table))
 }
 
-func newDefaultRule(schema string, table string) *Rule {
-	r := new(Rule)
+func NewRule(schema string, table string, canal *canal.Canal, skipNoPkTable bool) (*Rule, error) {
+	tableInfo, err := canal.GetTable(schema, table)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
 
-	r.Schema = schema
-	r.Table = table
-	r.Index = table
-	r.Type = table
-	r.FieldMapping = make(map[string]string)
-	r.ActionMapping = make(map[string]*ActionMapping)
-
-	return r
+	if len(tableInfo.PKColumns) == 0 && !skipNoPkTable {
+		return nil, errors.Errorf("%s.%s must have a PK for a column", schema, table)
+	}
+	lowerTable := strings.ToLower(table)
+	r := &Rule{
+		Schema:       schema,
+		Table:        table,
+		Index:        lowerTable,
+		Type:         lowerTable,
+		TableInfo:    tableInfo,
+		FieldMapping: make(map[string]string),
+	}
+	return r, nil
 }
 
-func (r *Rule) prepare() error {
-	if r.FieldMapping == nil {
-		r.FieldMapping = make(map[string]string)
+// CheckFilter checkers whether the field needs to be filtered.
+func (r *Rule) CheckFilter(field string) bool {
+	if r.Filter == nil {
+		return true
 	}
 
-	if len(r.Index) == 0 {
-		r.Index = r.Table
-	}
-
-	if len(r.Type) == 0 {
-		r.Type = r.Index
-	}
-
-	if r.ActionMapping == nil {
-		r.ActionMapping = make(map[string]*ActionMapping)
-	}
-
-	for _, mapping := range r.CustomActionMapping {
-		r.ActionMapping[mapping.DBAction] = mapping
-	}
-
-	if _, ok := r.ActionMapping[canal.InsertAction]; !ok {
-		r.ActionMapping[canal.InsertAction] = &ActionMapping{
-			DBAction: canal.InsertAction,
-			ESAction: elastic.ActionIndex,
+	for _, f := range r.Filter {
+		if f == field {
+			return true
 		}
 	}
-
-	if _, ok := r.ActionMapping[canal.UpdateAction]; !ok {
-		r.ActionMapping[canal.UpdateAction] = &ActionMapping{
-			DBAction: canal.UpdateAction,
-			ESAction: elastic.ActionUpdate,
-		}
-	}
-
-	if _, ok := r.ActionMapping[canal.DeleteAction]; !ok {
-		r.ActionMapping[canal.DeleteAction] = &ActionMapping{
-			DBAction: canal.DeleteAction,
-			ESAction: elastic.ActionDelete,
-		}
-	}
-
-	return nil
+	return false
 }

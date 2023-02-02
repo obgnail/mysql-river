@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"github.com/obgnail/mysql-river/config"
-	"github.com/obgnail/mysql-river/handler/es_old"
+	"github.com/obgnail/mysql-river/handler/es"
 	"github.com/obgnail/mysql-river/river"
 )
 
@@ -18,7 +18,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	handler, err := es_old.NewSyncESHandler(config.Config.ESHandler, canal)
+	handler, err := es.NewSyncESHandler(config.Config.ESHandler, canal)
 	if err != nil {
 		panic(err)
 	}

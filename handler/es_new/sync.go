@@ -1,4 +1,4 @@
-package es
+package es_new
 
 import (
 	"bytes"
@@ -9,7 +9,7 @@ import (
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/juju/errors"
-	"github.com/obgnail/mysql-river/handler/es/elastic"
+	"github.com/obgnail/mysql-river/handler/es_new/elastic"
 	"log"
 	"reflect"
 	"strings"

@@ -8,7 +8,7 @@ import (
 	"syscall"
 
 	"github.com/juju/errors"
-	"github.com/obgnail/mysql-river/handler/es"
+	"github.com/obgnail/mysql-river/handler/es_new"
 )
 
 var configFile = flag.String("config", "./river.toml", "go-mysql-elasticsearch config file")
@@ -34,7 +34,7 @@ func main() {
 		syscall.SIGTERM,
 		syscall.SIGQUIT)
 
-	cfg, err := es.NewConfigWithFile(*configFile)
+	cfg, err := es_new.NewConfigWithFile(*configFile)
 	if err != nil {
 		println(errors.ErrorStack(err))
 		return
@@ -72,7 +72,7 @@ func main() {
 		cfg.DumpExec = *execution
 	}
 
-	r, err := es.NewRiver(cfg)
+	r, err := es_new.NewRiver(cfg)
 	if err != nil {
 		println(errors.ErrorStack(err))
 		return

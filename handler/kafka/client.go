@@ -2,7 +2,7 @@ package kafka
 
 import (
 	"github.com/Shopify/sarama"
-	"github.com/pingcap/errors"
+	"github.com/juju/errors"
 	"sync"
 )
 
