@@ -22,26 +22,20 @@ const (
 )
 
 type TraceLogHandler struct {
-	showAllField     bool // show all field message in update sql
-	showQueryMessage bool // show transition msg in sql
-	highlight        bool // sql highlight
-	dbs              map[string]struct{}
+	entireFields bool // show all field message in update sql
+	showTxMsg    bool // show transition msg in sql
+	highlight    bool // sql highlight
+	dbs          map[string]struct{}
 }
 
-func list2Map(slice []string) map[string]struct{} {
-	res := make(map[string]struct{})
-	for _, ele := range slice {
-		res[strings.ToLower(ele)] = struct{}{}
-	}
-	return res
-}
+var _ river.EventHandler = (*TraceLogHandler)(nil)
 
-func New(dbs []string, showAllField, showQueryMessage, highlight bool) *TraceLogHandler {
+func New(dbs []string, entireFields, showTxMsg, highlight bool) *TraceLogHandler {
 	return &TraceLogHandler{
-		dbs:              list2Map(dbs),
-		showAllField:     showAllField,
-		showQueryMessage: showQueryMessage,
-		highlight:        highlight,
+		dbs:          list2map(dbs),
+		entireFields: entireFields,
+		showTxMsg:    showTxMsg,
+		highlight:    highlight,
 	}
 }
 
@@ -49,15 +43,19 @@ func (t *TraceLogHandler) String() string {
 	return "trace log"
 }
 
-func (t *TraceLogHandler) Show(event *river.EventData) error {
+func (t *TraceLogHandler) Handle(event *river.EventData) error {
 	var data string
 	switch event.EventType {
 	case river.EventTypeUpdate, river.EventTypeInsert, river.EventTypeDelete:
 		data = t.handlerRow(event)
 	case river.EventTypeGTID:
-		data = fmt.Sprintf("/* GTID: %s */", event.GTIDSet)
+		if t.showTxMsg {
+			data = fmt.Sprintf("/* GTID: %s */", event.GTIDSet)
+		}
 	case river.EventTypeXID:
-		data = fmt.Sprintf("/* XID: %s */", event.Position())
+		if t.showTxMsg {
+			data = fmt.Sprintf("/* XID: %s */", event.Position())
+		}
 	case river.EventTypeDDL:
 		data = event.SQL
 	}
@@ -76,7 +74,7 @@ func (t *TraceLogHandler) handlerRow(event *river.EventData) (sql string) {
 
 	switch event.EventType {
 	case river.EventTypeUpdate:
-		sql = GenUpdateSql(event, t.highlight, t.showAllField)
+		sql = GenUpdateSql(event, t.highlight, t.entireFields)
 	case river.EventTypeInsert:
 		sql = GenInsertSql(event, t.highlight)
 	case river.EventTypeDelete:
@@ -85,22 +83,14 @@ func (t *TraceLogHandler) handlerRow(event *river.EventData) (sql string) {
 	return
 }
 
-func map2list(kv map[string]interface{}) (fields []string, values []string) {
-	for filed, value := range kv {
-		fields = append(fields, fmt.Sprintf("`%s`", filed))
-		values = append(values, buildSqlFieldValue(value))
-	}
-	return
-}
-
-func GenUpdateSql(event *river.EventData, highlight bool, more bool) string {
+func GenUpdateSql(event *river.EventData, highlight bool, showAllField bool) string {
 	var setFields []string
-	if !more {
-		setFields = buildUpdateSqlSimpleFieldsExp(event.Before, event.After)
+	if !showAllField {
+		setFields = buildSimpleSqlKVExp(event.Before, event.After)
 	} else {
-		setFields = buildSqlFieldsExp(event.After, false)
+		setFields = buildSqlKVExp(event.After, false)
 	}
-	whereFields := buildSqlFieldsExp(event.Before, true)
+	whereFields := buildSqlKVExp(event.Before, true)
 
 	formatter := SqlNormalUpdateFormat
 	if highlight {
@@ -134,7 +124,7 @@ func GenInsertSql(event *river.EventData, highlight bool) string {
 }
 
 func GenDeleteSql(event *river.EventData, highlight bool) string {
-	kv := buildSqlFieldsExp(event.Before, true)
+	kv := buildSqlKVExp(event.Before, true)
 
 	formatter := SqlNormalDeleteFormat
 	if highlight {
@@ -149,7 +139,28 @@ func GenDeleteSql(event *river.EventData, highlight bool) string {
 	return content
 }
 
-func buildSqlFieldValue(value interface{}) string {
+func buildSqlKVExp(kv map[string]interface{}, inWhere bool) []string {
+	var res []string
+	for field, value := range kv {
+		valueStr := buildSqlValue(value)
+		res = append(res, buildEqualExp(field, valueStr, inWhere))
+	}
+	return res
+}
+
+func buildSimpleSqlKVExp(before, after map[string]interface{}) []string {
+	var res []string
+	for field, value := range after {
+		afterValue := buildSqlValue(value)
+		beforeValue := buildSqlValue(before[field])
+		if beforeValue != afterValue {
+			res = append(res, buildEqualExp(field, afterValue, false))
+		}
+	}
+	return res
+}
+
+func buildSqlValue(value interface{}) string {
 	if value == nil {
 		return "NULL"
 	}
@@ -183,15 +194,6 @@ func buildSqlFieldValue(value interface{}) string {
 	}
 }
 
-func buildSqlFieldsExp(kv map[string]interface{}, inWhere bool) []string {
-	var res []string
-	for field, value := range kv {
-		valueStr := buildSqlFieldValue(value)
-		res = append(res, buildEqualExp(field, valueStr, inWhere))
-	}
-	return res
-}
-
 func buildEqualExp(key, value string, inWhere bool) string {
 	// if v is NULL, may need to process
 	if inWhere && value == "NULL" {
@@ -201,14 +203,18 @@ func buildEqualExp(key, value string, inWhere bool) string {
 	return fmt.Sprintf("`%s`=%s", key, value)
 }
 
-func buildUpdateSqlSimpleFieldsExp(before, after map[string]interface{}) []string {
-	var res []string
-	for field, value := range after {
-		afterValue := buildSqlFieldValue(value)
-		beforeValue := buildSqlFieldValue(before[field])
-		if beforeValue != afterValue {
-			res = append(res, buildEqualExp(field, afterValue, false))
-		}
+func list2map(slice []string) map[string]struct{} {
+	res := make(map[string]struct{})
+	for _, ele := range slice {
+		res[strings.ToLower(ele)] = struct{}{}
 	}
 	return res
+}
+
+func map2list(kv map[string]interface{}) (fields []string, values []string) {
+	for filed, value := range kv {
+		fields = append(fields, fmt.Sprintf("`%s`", filed))
+		values = append(values, buildSqlValue(value))
+	}
+	return
 }

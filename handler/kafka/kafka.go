@@ -19,6 +19,8 @@ type KafkaHandler struct {
 	producer sarama.SyncProducer
 }
 
+var _ river.EventHandler = (*KafkaHandler)(nil)
+
 func New(addrs []string, topic string) (*KafkaHandler, error) {
 	producer, err := NewProducer(addrs)
 	if err != nil {
@@ -35,7 +37,7 @@ func (h *KafkaHandler) String() string {
 	return "kafka"
 }
 
-func (h *KafkaHandler) Send(event *river.EventData) error {
+func (h *KafkaHandler) Handle(event *river.EventData) error {
 	result, err := event.ToBytes()
 	if err != nil {
 		return errors.Trace(err)

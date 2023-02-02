@@ -10,71 +10,68 @@ import (
 	"time"
 )
 
-const (
-	defaultSaveInterval = 3 * time.Second
-)
-
-type HandlerFunc func(event *EventData) error
-
-var _ canal.EventHandler = (*BaseHandler)(nil)
-
-type BaseHandler struct {
+type River struct {
 	currentGTID string
 	nextLog     string
 	nextPos     uint32
 
-	handler HandlerFunc
+	handler EventHandler
 
 	masterInfo *masterInfo // 记录解析到哪了
 	canal      *canal.Canal
 	syncChan   chan *EventData
 	exitChan   chan struct{}
-	*canal.DummyEventHandler
 }
 
-func New(host string, port int64, user string, password string, masterInfoDir string) (*BaseHandler, error) {
+var _ canal.EventHandler = (*River)(nil)
+
+func New(host string, port int64, user string, password string,
+	masterInfoDir string, saveInterval time.Duration) (*River, error) {
 	_canal, err := newCanal(host, port, user, password)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	master, err := loadMasterInfo(masterInfoDir)
+	master, err := loadMasterInfo(masterInfoDir, saveInterval)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	h := &BaseHandler{
-		masterInfo:        master,
-		canal:             _canal,
-		syncChan:          make(chan *EventData, 4094),
-		exitChan:          make(chan struct{}, 1),
-		DummyEventHandler: new(canal.DummyEventHandler),
+	r := &River{
+		masterInfo: master,
+		canal:      _canal,
+		syncChan:   make(chan *EventData, 4094),
+		exitChan:   make(chan struct{}, 1),
 	}
-	return h, nil
+	return r, nil
 }
 
-func (h *BaseHandler) SetHandlerFunc(f HandlerFunc) {
-	h.handler = f
+func (r *River) SetHandlerFunc(handler EventHandler) {
+	r.handler = handler
 }
 
-func (h *BaseHandler) updatePos(nextLog string, nextPos uint32, currentGTID string) {
+func (r *River) Position() mysql.Position {
+	return r.masterInfo.Position()
+}
+
+func (r *River) updatePos(nextLog string, nextPos uint32, currentGTID string) {
 	if len(nextLog) != 0 && nextPos != 0 {
-		h.nextLog = nextLog
-		h.nextPos = nextPos
+		r.nextLog = nextLog
+		r.nextPos = nextPos
 	}
 	if len(currentGTID) != 0 {
-		h.currentGTID = currentGTID
+		r.currentGTID = currentGTID
 	}
 }
 
-func (h *BaseHandler) String() string {
-	return "base"
+func (r *River) String() string {
+	return "river"
 }
 
-func (h *BaseHandler) OnRotate(e *replication.RotateEvent) error {
-	h.updatePos(string(e.NextLogName), uint32(e.Position), "")
-	h.syncChan <- &EventData{
-		ServerID:  0,
-		LogName:   h.nextLog,
-		LogPos:    h.nextPos,
+func (r *River) OnRotate(header *replication.EventHeader, e *replication.RotateEvent) error {
+	r.updatePos(string(e.NextLogName), uint32(e.Position), "")
+	r.syncChan <- &EventData{
+		ServerID:  header.ServerID,
+		LogName:   r.nextLog,
+		LogPos:    r.nextPos,
 		Db:        "",
 		SQL:       "",
 		Table:     "",
@@ -83,36 +80,36 @@ func (h *BaseHandler) OnRotate(e *replication.RotateEvent) error {
 		Primary:   []string{},
 		Before:    make(map[string]interface{}),
 		After:     make(map[string]interface{}),
-		Timestamp: 0,
+		Timestamp: header.Timestamp,
 	}
 	return nil
 }
 
-func (h *BaseHandler) OnDDL(nextPos mysql.Position, e *replication.QueryEvent) error {
-	h.updatePos(nextPos.Name, nextPos.Pos, e.GSet.String())
-	h.syncChan <- &EventData{
-		ServerID:  e.SlaveProxyID,
-		LogName:   h.nextLog,
-		LogPos:    h.nextPos,
+func (r *River) OnDDL(header *replication.EventHeader, nextPos mysql.Position, e *replication.QueryEvent) error {
+	r.updatePos(nextPos.Name, nextPos.Pos, e.GSet.String())
+	r.syncChan <- &EventData{
+		ServerID:  header.ServerID,
+		LogName:   r.nextLog,
+		LogPos:    r.nextPos,
 		Db:        string(e.Schema),
 		SQL:       string(e.Query),
 		Table:     "",
 		EventType: EventTypeDDL,
-		GTIDSet:   h.currentGTID,
+		GTIDSet:   r.currentGTID,
 		Primary:   []string{},
 		Before:    make(map[string]interface{}),
 		After:     make(map[string]interface{}),
-		Timestamp: e.ExecutionTime,
+		Timestamp: header.Timestamp,
 	}
 	return nil
 }
 
-func (h *BaseHandler) OnXID(nextPos mysql.Position) error {
-	h.updatePos(nextPos.Name, nextPos.Pos, "")
-	h.syncChan <- &EventData{
-		ServerID:  0,
-		LogName:   h.nextLog,
-		LogPos:    h.nextPos,
+func (r *River) OnXID(header *replication.EventHeader, nextPos mysql.Position) error {
+	r.updatePos(nextPos.Name, nextPos.Pos, "")
+	r.syncChan <- &EventData{
+		ServerID:  header.ServerID,
+		LogName:   r.nextLog,
+		LogPos:    r.nextPos,
 		Db:        "",
 		SQL:       "",
 		Table:     "",
@@ -121,31 +118,31 @@ func (h *BaseHandler) OnXID(nextPos mysql.Position) error {
 		Primary:   []string{},
 		Before:    make(map[string]interface{}),
 		After:     make(map[string]interface{}),
-		Timestamp: 0,
+		Timestamp: header.Timestamp,
 	}
 	return nil
 }
 
-func (h *BaseHandler) OnGTID(gtid mysql.GTIDSet) error {
-	h.updatePos("", 0, gtid.String())
-	h.syncChan <- &EventData{
-		ServerID:  0,
-		LogName:   h.nextLog,
-		LogPos:    h.nextPos,
+func (r *River) OnGTID(header *replication.EventHeader, gtid mysql.GTIDSet) error {
+	r.updatePos(r.nextLog, header.LogPos, gtid.String())
+	r.syncChan <- &EventData{
+		ServerID:  header.ServerID,
+		LogName:   r.nextLog,
+		LogPos:    r.nextPos,
 		Db:        "",
 		SQL:       "",
 		Table:     "",
 		EventType: EventTypeGTID,
-		GTIDSet:   h.currentGTID,
+		GTIDSet:   r.currentGTID,
 		Primary:   []string{},
 		Before:    make(map[string]interface{}),
 		After:     make(map[string]interface{}),
-		Timestamp: 0,
+		Timestamp: header.Timestamp,
 	}
 	return nil
 }
 
-func (h *BaseHandler) OnRow(e *canal.RowsEvent) error {
+func (r *River) OnRow(e *canal.RowsEvent) error {
 	before := make(map[string]interface{})
 	after := make(map[string]interface{})
 	switch e.Action {
@@ -162,16 +159,16 @@ func (h *BaseHandler) OnRow(e *canal.RowsEvent) error {
 	for _, colIdx := range e.Table.PKColumns {
 		primaryKey = append(primaryKey, e.Table.Columns[colIdx].Name)
 	}
-	h.updatePos(h.nextLog, e.Header.LogPos, "")
-	h.syncChan <- &EventData{
+	r.updatePos(r.nextLog, e.Header.LogPos, "")
+	r.syncChan <- &EventData{
 		ServerID:  e.Header.ServerID,
-		LogName:   h.nextLog,
-		LogPos:    h.nextPos,
+		LogName:   r.nextLog,
+		LogPos:    r.nextPos,
 		Db:        e.Table.Schema,
 		Table:     e.Table.Name,
 		SQL:       "",
 		EventType: e.Action,
-		GTIDSet:   h.currentGTID,
+		GTIDSet:   r.currentGTID,
 		Primary:   primaryKey,
 		Before:    before,
 		After:     after,
@@ -180,30 +177,56 @@ func (h *BaseHandler) OnRow(e *canal.RowsEvent) error {
 	return nil
 }
 
-func (h *BaseHandler) Range(f func(event *EventData) error) {
+func (r *River) OnTableChanged(header *replication.EventHeader, schema string, table string) error {
+	r.updatePos(r.nextLog, header.LogPos, "")
+	r.syncChan <- &EventData{
+		ServerID:  header.ServerID,
+		LogName:   r.nextLog,
+		LogPos:    r.nextPos,
+		Db:        schema,
+		SQL:       "",
+		Table:     table,
+		EventType: EventTypeTableChanged,
+		GTIDSet:   r.currentGTID,
+		Primary:   []string{},
+		Before:    make(map[string]interface{}),
+		After:     make(map[string]interface{}),
+		Timestamp: header.Timestamp,
+	}
+	return nil
+}
+
+// 监听binlog日志的变化文件与记录的位置,不使用此函数,因为从master.info恢复时不会触发此函数
+func (r *River) OnPosSynced(header *replication.EventHeader, pos mysql.Position, set mysql.GTIDSet, force bool) error {
+	return nil
+}
+
+func (r *River) rangeEvent(handler EventHandler) {
 	ticker := time.NewTicker(defaultSaveInterval)
 	defer ticker.Stop()
-	binlogName, binlogPas := h.masterInfo.Name, h.masterInfo.Pos
+
+	binlogName, binlogPas := r.masterInfo.Name, r.masterInfo.Pos
 	for {
 		needSavePos := false
 		select {
 		case <-ticker.C:
 			needSavePos = true
-		case <-h.exitChan:
+		case <-r.exitChan:
 			return
-		case event := <-h.syncChan:
+		case event := <-r.syncChan:
 			binlogName, binlogPas = event.LogName, event.LogPos
 			if event.EventType == EventTypeRotate || event.EventType == EventTypeDDL {
 				needSavePos = true
 			}
-			if err := f(event); err != nil {
-				h.exitChan <- struct{}{}
+			if err := handler.Handle(event); err != nil {
+				r.exitChan <- struct{}{}
 			}
 		}
 
 		if needSavePos {
-			if err := h.masterInfo.Save(binlogName, binlogPas); err != nil {
-				h.exitChan <- struct{}{}
+			if err := r.masterInfo.Save(binlogName, binlogPas); err != nil {
+				// 无法正常写入,直接退出
+				r.exitChan <- struct{}{}
 			}
 		}
 	}
@@ -216,20 +239,19 @@ const (
 	FromInfoFile  From = "master.info"
 )
 
-// from:db or file
-func (h *BaseHandler) RunFrom(from From) (err error) {
-	go h.Range(h.handler)
+func (r *River) RunFrom(from From) (err error) {
+	go r.rangeEvent(r.handler)
 
-	start := h.masterInfo.Position()
+	start := r.Position()
 	if from == FromMasterPos || len(start.Name) == 0 || start.Pos == 0 {
-		if start, err = h.canal.GetMasterPos(); err != nil {
+		if start, err = r.canal.GetMasterPos(); err != nil {
 			return errors.Trace(err)
 		}
 	}
 
-	h.canal.SetEventHandler(h)
+	r.canal.SetEventHandler(r)
 	fmt.Println(logo)
-	if err := h.canal.RunFrom(start); err != nil {
+	if err := r.canal.RunFrom(start); err != nil {
 		return errors.Trace(err)
 	}
 	return nil

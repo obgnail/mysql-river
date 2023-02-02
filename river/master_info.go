@@ -17,7 +17,8 @@ import (
 const (
 	fileName = "master.info"
 
-	saveMinDuration = time.Second
+	saveMinDuration     = time.Second // 保存的最小时间间隔
+	defaultSaveInterval = 3 * time.Second
 )
 
 var (
@@ -31,9 +32,10 @@ type masterInfo struct {
 	Pos          uint32 `toml:"bin_pos"`
 	filePath     string
 	lastSaveTime time.Time
+	saveInterval time.Duration
 }
 
-func loadMasterInfo(dataDir string) (*masterInfo, error) {
+func loadMasterInfo(dataDir string, saveInterval time.Duration) (*masterInfo, error) {
 	var m masterInfo
 	if len(dataDir) == 0 {
 		return &m, emptyDirErr
@@ -44,6 +46,11 @@ func loadMasterInfo(dataDir string) (*masterInfo, error) {
 
 	m.filePath = path.Join(dataDir, fileName)
 	m.lastSaveTime = time.Now()
+
+	m.saveInterval = defaultSaveInterval
+	if saveInterval > 0 {
+		m.saveInterval = saveInterval
+	}
 
 	f, err := os.Open(m.filePath)
 	defer f.Close()
@@ -64,6 +71,10 @@ func (m *masterInfo) Position() mysql.Position {
 	return pos
 }
 
+func (m *masterInfo) CanSave(saveTime time.Time) bool {
+	return saveTime.Sub(m.lastSaveTime) > m.saveInterval
+}
+
 func (m *masterInfo) Save(name string, pos uint32) error {
 	m.Lock()
 	defer m.Unlock()
@@ -76,7 +87,6 @@ func (m *masterInfo) Save(name string, pos uint32) error {
 	}
 
 	n := time.Now()
-	// 保存的最小时间间隔
 	if n.Sub(m.lastSaveTime) < saveMinDuration {
 		return nil
 	}
