@@ -15,18 +15,21 @@ type River struct {
 	nextLog     string
 	nextPos     uint32
 
-	handler EventHandler
+	handler Handler
 
 	masterInfo *masterInfo // 记录解析到哪了
+	healthInfo *healthInfo // 记录masterInfo和canal.GetMasterPos()的差距,可对接告警机制
 	canal      *canal.Canal
 	syncChan   chan *EventData
+	statusChan chan *StatusMsg
 	exitChan   chan struct{}
 }
 
 var _ canal.EventHandler = (*River)(nil)
 
 func New(host string, port int64, user string, password string,
-	masterInfoDir string, saveInterval time.Duration) (*River, error) {
+	masterInfoDir string, saveInterval time.Duration,
+	healthCheckInterval int, checkPosThreshold int) (*River, error) {
 	_canal, err := newCanal(host, port, user, password)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -35,26 +38,114 @@ func New(host string, port int64, user string, password string,
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	health := newHealthInfo(healthCheckInterval, checkPosThreshold)
 	r := &River{
 		masterInfo: master,
+		healthInfo: health,
 		canal:      _canal,
 		syncChan:   make(chan *EventData, 4094),
+		statusChan: make(chan *StatusMsg, 64),
 		exitChan:   make(chan struct{}, 1),
 	}
 	return r, nil
 }
 
-func (r *River) SetHandlerFunc(handler EventHandler) {
+func (r *River) SetHandler(handler Handler) {
 	r.handler = handler
-}
-
-func (r *River) Position() mysql.Position {
-	return r.masterInfo.Position()
 }
 
 func (r *River) Close() {
 	r.canal.Close()
 	r.masterInfo.Close()
+	r.handler.OnClose(r)
+}
+
+func (r *River) GetFilePosition() mysql.Position {
+	return r.masterInfo.Position()
+}
+
+func (r *River) GetDBPosition() (pos mysql.Position, err error) {
+	pos, err = r.canal.GetMasterPos()
+	if err != nil {
+		return pos, errors.Trace(err)
+	}
+	return pos, nil
+}
+
+// To avoid false alarms, need to sleep for a period of time, then take the result again and compare it again
+func (r *River) recheckFilePos(preFilePos *mysql.Position) (pass bool) {
+	time.Sleep(defaultHealthGracePeriod)
+	curFilePos := r.GetFilePosition()
+	return curFilePos.Compare(*preFilePos) == 1
+}
+
+// healthCheck 检测健康状态
+// 当获取 db-pos 失败时, 健康状态为 red
+// 当 db-pos 跟 file-pos 相差在阈值内, 健康状态为 green
+// 当 db-pos 跟 file-pos 相关在阈值外时, 健康状态为 yellow
+// 当 db-pos 跟 上次记录的 db-pos 没有变化时，且file-pos 跟 上次记录的 file-pos 没有变化时，且 db-pos 跟 file-pos 相等时 健康状态为 green
+// 当 db-pos 跟 上次记录的 db-pos 没有变化时，且file-pos 跟 上次记录的 file-pos 没有变化时，且 db-pos 大于 file-pos 时 健康状态为 red
+// 当 db-pos 跟 上次记录的 db-pos 没有变化时，且file-pos 跟 上次记录的 file-pos 有变化时, 健康状态为 green
+// 当 db-pos 跟 上次记录的 db-pos 有变化时, 且 file-pos 跟 上次记录的 file-pos 没有变化时, 健康状态为 red
+// 当 db-pos 跟 上次记录的 db-pos 有变化时, 且 file-pos 跟 上次记录的 file-pos 有变化时, 健康状态为 green
+// 最终根据各个判读条件得到的状态值，以最差的状态值作为最终健康状态
+func (r *River) healthCheck() {
+	status := healthStatusGreen
+	var reasons []string
+
+	filePos := r.GetFilePosition()
+	dbPos, err := r.GetDBPosition()
+	if err != nil {
+		reason := []string{ReasonGetPosError + err.Error()}
+		r.statusChan <- r.healthInfo.NewMsg(healthStatusRed, reason, &filePos, &dbPos)
+		return
+	}
+	if r.healthInfo.lastDBPos == nil {
+		r.healthInfo.lastDBPos = &dbPos
+	}
+	if r.healthInfo.lastFilePos == nil {
+		r.healthInfo.lastFilePos = &filePos
+	}
+
+	startPos := filePos.Pos
+	if filePos.Name != dbPos.Name { // 已经更换binlog文件
+		startPos = 0
+	}
+	if startPos+uint32(r.healthInfo.posThreshold) < dbPos.Pos {
+		status.ChooseWorse(healthStatusYellow)
+		reasons = append(reasons, ReasonExceedThreshold)
+	}
+
+	if r.healthInfo.dbMakeNoProgress(&dbPos) {
+		if r.healthInfo.fileMakeNoProgress(&filePos) && !r.healthInfo.Equal(&dbPos, &filePos) &&
+			!r.recheckFilePos(&filePos) {
+			status.ChooseWorse(healthStatusRed)
+			reasons = append(reasons, ReasonStopApproaching)
+		}
+	} else {
+		if r.healthInfo.fileMakeNoProgress(&filePos) && !r.recheckFilePos(&filePos) {
+			status.ChooseWorse(healthStatusRed)
+			reasons = append(reasons, ReasonStopSync)
+		}
+	}
+	r.statusChan <- r.healthInfo.NewMsg(status, reasons, &filePos, &dbPos)
+}
+
+func (r *River) HealthCheck() {
+	// TODO 去除sleep
+	//time.Sleep(5 * time.Second)
+	ticker := time.NewTicker(r.healthInfo.checkInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			r.healthCheck()
+		case msg := <-r.statusChan:
+			if err := r.healthInfo.Update(msg, r.handler.OnAlert); err != nil {
+				r.exitChan <- struct{}{}
+			}
+		}
+	}
 }
 
 func (r *River) updatePos(nextLog string, nextPos uint32, currentGTID string) {
@@ -206,7 +297,7 @@ func (r *River) OnPosSynced(header *replication.EventHeader, pos mysql.Position,
 	return nil
 }
 
-func (r *River) rangeEvent(handler EventHandler) {
+func (r *River) HandleEvent(handler Handler) {
 	ticker := time.NewTicker(r.masterInfo.saveInterval)
 	defer ticker.Stop()
 
@@ -224,16 +315,18 @@ func (r *River) rangeEvent(handler EventHandler) {
 			if event.EventType == EventTypeRotate || event.EventType == EventTypeDDL {
 				needSavePos = true
 			}
-			if err := handler.Handle(event); err != nil {
+			if err := handler.OnEvent(event); err != nil {
 				r.exitChan <- struct{}{}
 			}
 		}
 
 		if needSavePos {
-			if err := r.masterInfo.Save(binlogName, binlogPas); err != nil {
-				// 无法正常写入,直接退出
-				r.exitChan <- struct{}{}
-			}
+			fmt.Println(binlogName, binlogPas)
+			// TODO 去除注释
+			//if err := r.masterInfo.Save(binlogName, binlogPas); err != nil {
+			//	// 无法正常写入,直接退出
+			//	r.exitChan <- struct{}{}
+			//}
 		}
 	}
 }
@@ -246,11 +339,12 @@ const (
 )
 
 func (r *River) RunFrom(from From) (err error) {
-	go r.rangeEvent(r.handler)
+	go r.HandleEvent(r.handler)
+	go r.HealthCheck()
 
-	start := r.Position()
+	start := r.GetFilePosition()
 	if from == FromMasterPos || len(start.Name) == 0 || start.Pos == 0 {
-		if start, err = r.canal.GetMasterPos(); err != nil {
+		if start, err = r.GetDBPosition(); err != nil {
 			return errors.Trace(err)
 		}
 	}

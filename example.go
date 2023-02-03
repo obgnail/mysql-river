@@ -15,13 +15,13 @@ func PanicIfError(err error) {
 }
 
 func Kafka() {
-	r, err := river.New("127.0.0.1", 3306, "root", "root", "./", 0)
+	r, err := river.New("127.0.0.1", 3306, "root", "root", "./", 0, 5, 3)
 	PanicIfError(err)
 
 	handler, err := kafka.New([]string{"127.0.0.1:9092"}, "binlog")
 	PanicIfError(err)
 
-	r.SetHandlerFunc(handler)
+	r.SetHandler(handler)
 
 	go handler.Consume(func(msg *sarama.ConsumerMessage) error {
 		fmt.Printf("Partition:%d, Offset:%d, key:%s, value:%s\n",
@@ -34,18 +34,21 @@ func Kafka() {
 }
 
 func TraceLog() {
-	r, err := river.New("127.0.0.1", 3306, "root", "root", "./", 0)
+	r, err := river.New("127.0.0.1", 3306, "root", "root", "./", 0, 5, 3)
 	PanicIfError(err)
 	handler := trace_log.New([]string{"testdb01"}, false, true, true)
-	r.SetHandlerFunc(handler)
+	r.SetHandler(handler)
 	err = r.RunFrom(river.FromInfoFile)
 	PanicIfError(err)
 }
 
 func Base() {
-	r, err := river.New("127.0.0.1", 3306, "root", "root", "./", 0)
+	r, err := river.New(
+		"127.0.0.1", 3306, "root", "root",
+		"./", 0,
+		5, 3)
 	PanicIfError(err)
-	r.SetHandlerFunc(river.HandlerFunc(func(event *river.EventData) error {
+	r.SetHandler(river.NopCloserAlerter(func(event *river.EventData) error {
 		fmt.Println(event.EventType, event.LogName, event.LogPos, event.Before, event.After)
 		return nil
 	}))
@@ -54,7 +57,7 @@ func Base() {
 }
 
 func main() {
-	//Base()
-	TraceLog()
+	Base()
+	//TraceLog()
 	//Kafka()
 }

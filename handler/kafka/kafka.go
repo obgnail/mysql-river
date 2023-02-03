@@ -6,12 +6,6 @@ import (
 	"github.com/obgnail/mysql-river/river"
 )
 
-const (
-	EventTypeDDL  = "ddl"
-	EventTypeGTID = "gtid"
-	EventTypeXID  = "xid"
-)
-
 type KafkaHandler struct {
 	topic string
 	addrs []string
@@ -19,7 +13,7 @@ type KafkaHandler struct {
 	producer sarama.SyncProducer
 }
 
-var _ river.EventHandler = (*KafkaHandler)(nil)
+var _ river.Handler = (*KafkaHandler)(nil)
 
 func New(addrs []string, topic string) (*KafkaHandler, error) {
 	producer, err := NewProducer(addrs)
@@ -37,7 +31,15 @@ func (h *KafkaHandler) String() string {
 	return "kafka"
 }
 
-func (h *KafkaHandler) Handle(event *river.EventData) error {
+func (h *KafkaHandler) OnAlert(msg *river.StatusMsg) error {
+	return nil
+}
+
+func (h *KafkaHandler) OnClose(r *river.River) {
+	return
+}
+
+func (h *KafkaHandler) OnEvent(event *river.EventData) error {
 	result, err := event.ToBytes()
 	if err != nil {
 		return errors.Trace(err)

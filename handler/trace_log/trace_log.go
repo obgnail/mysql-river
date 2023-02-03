@@ -28,7 +28,7 @@ type TraceLogHandler struct {
 	dbs          map[string]struct{}
 }
 
-var _ river.EventHandler = (*TraceLogHandler)(nil)
+var _ river.Handler = (*TraceLogHandler)(nil)
 
 func New(dbs []string, entireFields, showTxMsg, highlight bool) *TraceLogHandler {
 	return &TraceLogHandler{
@@ -43,7 +43,15 @@ func (t *TraceLogHandler) String() string {
 	return "trace log"
 }
 
-func (t *TraceLogHandler) Handle(event *river.EventData) error {
+func (t *TraceLogHandler) OnAlert(msg *river.StatusMsg) error {
+	return nil
+}
+
+func (t *TraceLogHandler) OnClose(r *river.River) {
+	return
+}
+
+func (t *TraceLogHandler) OnEvent(event *river.EventData) error {
 	var data string
 	switch event.EventType {
 	case river.EventTypeUpdate, river.EventTypeInsert, river.EventTypeDelete:
