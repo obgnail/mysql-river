@@ -52,6 +52,11 @@ func (r *River) Position() mysql.Position {
 	return r.masterInfo.Position()
 }
 
+func (r *River) Close() {
+	r.canal.Close()
+	r.masterInfo.Close()
+}
+
 func (r *River) updatePos(nextLog string, nextPos uint32, currentGTID string) {
 	if len(nextLog) != 0 && nextPos != 0 {
 		r.nextLog = nextLog
@@ -212,6 +217,7 @@ func (r *River) rangeEvent(handler EventHandler) {
 		case <-ticker.C:
 			needSavePos = true
 		case <-r.exitChan:
+			r.Close()
 			return
 		case event := <-r.syncChan:
 			binlogName, binlogPas = event.LogName, event.LogPos

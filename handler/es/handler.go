@@ -286,7 +286,7 @@ func (s *SyncESHandler) makeRequest(rule *Rule, action string, rows [][]interfac
 			}
 		}
 
-		req := &BulkRequest{Index: rule.Index, Type: rule.Type, ID: id, Parent: parentID, Pipeline: rule.Pipeline}
+		req := &BulkRequest{Index: rule.Index, ID: id, Parent: parentID, Pipeline: rule.Pipeline}
 
 		if action == canal.DeleteAction {
 			req.Action = ActionDelete
@@ -357,13 +357,13 @@ func (s *SyncESHandler) makeUpdateRequest(rule *Rule, rows [][]interface{}) ([]*
 			}
 		}
 
-		req := &BulkRequest{Index: rule.Index, Type: rule.Type, ID: beforeID, Parent: beforeParentID}
+		req := &BulkRequest{Index: rule.Index, ID: beforeID, Parent: beforeParentID}
 
 		if beforeID != afterID || beforeParentID != afterParentID {
 			req.Action = ActionDelete
 			reqs = append(reqs, req)
 
-			req = &BulkRequest{Index: rule.Index, Type: rule.Type, ID: afterID, Parent: afterParentID, Pipeline: rule.Pipeline}
+			req = &BulkRequest{Index: rule.Index, ID: afterID, Parent: afterParentID, Pipeline: rule.Pipeline}
 			s.makeInsertReqData(req, rule, rows[i+1])
 		} else {
 			if len(rule.Pipeline) > 0 {
@@ -556,7 +556,7 @@ func (s *SyncESHandler) getFieldValue(col *schema.TableColumn, fieldType string,
 
 func prepareClient(cfg *SyncESConfig) *Client {
 	return NewClient(&ClientConfig{
-		Addr:     fmt.Sprintf("%s:%s", cfg.ESHost, cfg.ESPort),
+		Addr:     fmt.Sprintf("%s:%d", cfg.ESHost, cfg.ESPort),
 		User:     cfg.ESUser,
 		Password: cfg.ESPassword,
 	})

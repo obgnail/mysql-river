@@ -71,6 +71,12 @@ func (m *masterInfo) Position() mysql.Position {
 	return pos
 }
 
+func (m *masterInfo) Close() error {
+	pos := m.Position()
+	err := m.Save(pos.Name, pos.Pos)
+	return errors.Trace(err)
+}
+
 func (m *masterInfo) CanSave(saveTime time.Time) bool {
 	return saveTime.Sub(m.lastSaveTime) > m.saveInterval
 }
