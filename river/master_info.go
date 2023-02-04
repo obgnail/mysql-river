@@ -43,14 +43,13 @@ func loadMasterInfo(dataDir string, saveInterval time.Duration) (*masterInfo, er
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, errors.Trace(err)
 	}
-
 	m.filePath = path.Join(dataDir, fileName)
-	m.lastSaveTime = time.Now()
 
-	m.saveInterval = defaultSaveInterval
-	if saveInterval > 0 {
-		m.saveInterval = saveInterval
+	if saveInterval < saveMinDuration {
+		saveInterval = defaultSaveInterval
 	}
+	m.saveInterval = saveInterval
+	m.lastSaveTime = time.Now()
 
 	f, err := os.Open(m.filePath)
 	defer f.Close()

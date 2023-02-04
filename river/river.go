@@ -1,6 +1,7 @@
 package river
 
 import (
+	"context"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-mysql-org/go-mysql/mysql"
@@ -11,47 +12,82 @@ import (
 )
 
 type River struct {
+	config *Config
+
+	handler Handler
+
 	currentGTID string
 	nextLog     string
 	nextPos     uint32
 
-	handler Handler
-
 	masterInfo *masterInfo // 记录解析到哪了
 	healthInfo *healthInfo // 记录masterInfo和canal.GetMasterPos()的差距,可对接告警机制
 	canal      *canal.Canal
+
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	syncChan   chan *EventData
 	statusChan chan *StatusMsg
-	exitChan   chan struct{}
 }
 
 var _ canal.EventHandler = (*River)(nil)
 
-func New(host string, port int64, user string, password string,
-	masterInfoDir string, saveInterval time.Duration,
-	healthCheckInterval int, checkPosThreshold int) (*River, error) {
-	_canal, err := newCanal(host, port, user, password)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	master, err := loadMasterInfo(masterInfoDir, saveInterval)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	health := newHealthInfo(healthCheckInterval, checkPosThreshold)
-	r := &River{
-		masterInfo: master,
-		healthInfo: health,
-		canal:      _canal,
-		syncChan:   make(chan *EventData, 4094),
-		statusChan: make(chan *StatusMsg, 64),
-		exitChan:   make(chan struct{}, 2),
-	}
-	return r, nil
+func New(config *Config) *River {
+	return &River{config: config}
 }
 
-func (r *River) SetHandler(handler Handler) {
+func (r *River) SetHandler(handler Handler) *River {
 	r.handler = handler
+	return r
+}
+
+func (r *River) Sync(from From) (err error) {
+	fmt.Println(logo)
+	fmt.Printf("From:\t%+v\n", from)
+	fmt.Printf("MySQLConfig:\t%+v\n", r.config.MySQLConfig)
+	fmt.Printf("PosAutoSaver:\t%+v\n", r.config.PosAutoSaver)
+	fmt.Printf("HealthChecker:\t%+v\n", r.config.HealthChecker)
+
+	if err = r.prepare(); err != nil {
+		return errors.Trace(err)
+	}
+
+	startPos := r.GetFilePosition()
+	if from == FromDB || len(startPos.Name) == 0 || startPos.Pos == 0 {
+		if startPos, err = r.GetDBPosition(); err != nil {
+			return errors.Trace(err)
+		}
+	}
+
+	go r.loopSync(startPos, r.handler.OnEvent)
+	go r.loopHealthCheck(r.handler.OnAlert)
+
+	r.canal.SetEventHandler(r)
+	if err := r.canal.RunFrom(startPos); err != nil {
+		return errors.Trace(err)
+	}
+	return nil
+}
+
+func (r *River) prepare() (err error) {
+	db := r.config.MySQLConfig
+	saver := r.config.PosAutoSaver
+	checker := r.config.HealthChecker
+
+	r.canal, err = newCanal(db.Host, db.Port, db.User, db.Password)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	r.masterInfo, err = loadMasterInfo(saver.SaveDir, saver.SaveInterval)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	r.healthInfo = newHealthInfo(checker.CheckInterval, checker.CheckPosThreshold)
+	r.ctx, r.cancel = context.WithCancel(context.Background())
+	r.syncChan = make(chan *EventData, 4094)
+	r.statusChan = make(chan *StatusMsg, 64)
+	return nil
 }
 
 func (r *River) GetFilePosition() mysql.Position {
@@ -215,20 +251,17 @@ func (r *River) OnPosSynced(header *replication.EventHeader, pos mysql.Position,
 	return nil
 }
 
-func (r *River) OnClose(onClose func(r *River)) {
+func (r *River) Close() {
+	Logger.Info("closing river")
 	r.canal.Close()
 	r.masterInfo.Close()
-	onClose(r)
-}
-
-func (r *River) Exit() {
-	// 连发两条,因为需要关闭 r.Handle 和 r.HealthCheck 两个 goroutine
-	r.exitChan <- struct{}{}
-	r.exitChan <- struct{}{}
+	r.cancel()
+	r.handler.OnClose(r)
 }
 
 // To avoid false alarms, need to sleep for a period of time, then take the result again and compare it again
 func (r *River) recheckFilePos(preFilePos *mysql.Position) (pass bool) {
+	Logger.Debug("rechecking file position")
 	time.Sleep(defaultHealthGracePeriod)
 	curFilePos := r.GetFilePosition()
 	return curFilePos.Compare(*preFilePos) == 1
@@ -284,23 +317,25 @@ func (r *River) healthCheck() {
 		}
 	}
 	r.statusChan <- r.healthInfo.NewMsg(status, reasons, &filePos, &dbPos)
+	Logger.Debugf("health checked: [%s]", status)
 }
 
-func (r *River) HealthCheck(onAlert func(msg *StatusMsg) error) {
+func (r *River) loopHealthCheck(onAlert func(msg *StatusMsg) error) {
 	time.Sleep(5 * time.Second)
-	healthCheckTicker := time.NewTicker(r.healthInfo.checkInterval)
-	defer healthCheckTicker.Stop()
+	ticker := time.NewTicker(r.healthInfo.checkInterval)
+	defer ticker.Stop()
 	for {
 		select {
-		case <-healthCheckTicker.C:
-			r.healthCheck()
-		case <-r.exitChan:
+		case <-r.ctx.Done():
+			Logger.Info("health check process had done")
 			return
+		case <-ticker.C:
+			r.healthCheck()
 		case msg := <-r.statusChan:
 			if needAlert := r.healthInfo.Update(msg); needAlert {
 				go func() {
 					if err := onAlert(msg); err != nil {
-						r.Exit()
+						r.Close()
 					}
 				}()
 			}
@@ -308,62 +343,36 @@ func (r *River) HealthCheck(onAlert func(msg *StatusMsg) error) {
 	}
 }
 
-func (r *River) Handle(startPos mysql.Position, onEvent func(event *EventData) error, onClose func(r *River)) {
-	savePosTicker := time.NewTicker(r.masterInfo.saveInterval)
-	defer savePosTicker.Stop()
+func (r *River) loopSync(startPos mysql.Position, onEvent func(event *EventData) error) {
+	ticker := time.NewTicker(r.masterInfo.saveInterval)
+	defer ticker.Stop()
 
-	binlogName, binlogPas := startPos.Name, startPos.Pos
+	logName, logPas := startPos.Name, startPos.Pos
 	for {
 		needSavePos := false
 		select {
-		case <-savePosTicker.C:
-			needSavePos = true
-		case <-r.exitChan:
-			r.OnClose(onClose)
+		case <-r.ctx.Done():
+			Logger.Info("event handle and position auto saver process had done")
 			return
+		case <-ticker.C:
+			needSavePos = true
 		case event := <-r.syncChan:
-			binlogName, binlogPas = event.LogName, event.LogPos
+			logName, logPas = event.LogName, event.LogPos
 			if event.EventType == EventTypeRotate || event.EventType == EventTypeDDL {
 				needSavePos = true
 			}
 			if err := onEvent(event); err != nil {
-				r.Exit()
+				r.Close()
 			}
 		}
 
 		if needSavePos {
-			if err := r.masterInfo.Save(binlogName, binlogPas); err != nil {
-				// 无法正常写入,直接退出
-				r.Exit()
+			Logger.Debugf("position auto save at: [%s:%d]", logName, logPas)
+			if err := r.masterInfo.Save(logName, logPas); err != nil {
+				r.Close() // 无法正常写入,直接退出
 			}
 		}
 	}
-}
-
-type From string
-
-const (
-	FromMasterPos From = "masterPos"
-	FromInfoFile  From = "master.info"
-)
-
-func (r *River) RunFrom(from From) (err error) {
-	fmt.Println(logo)
-	startPos := r.GetFilePosition()
-	if from == FromMasterPos || len(startPos.Name) == 0 || startPos.Pos == 0 {
-		if startPos, err = r.GetDBPosition(); err != nil {
-			return errors.Trace(err)
-		}
-	}
-
-	go r.Handle(startPos, r.handler.OnEvent, r.handler.OnClose)
-	go r.HealthCheck(r.handler.OnAlert)
-
-	r.canal.SetEventHandler(r)
-	if err := r.canal.RunFrom(startPos); err != nil {
-		return errors.Trace(err)
-	}
-	return nil
 }
 
 func newCanal(host string, port int64, user string, password string) (*canal.Canal, error) {

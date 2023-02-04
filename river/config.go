@@ -10,7 +10,7 @@ type MySQLConfig struct {
 }
 
 type PosAutoSaver struct {
-	Dir          string
+	SaveDir      string
 	SaveInterval time.Duration
 }
 
@@ -24,3 +24,10 @@ type Config struct {
 	*PosAutoSaver
 	*HealthChecker
 }
+
+type From string
+
+const (
+	FromDB   From = "db-position"
+	FromFile From = "file-position"
+)

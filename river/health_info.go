@@ -42,12 +42,12 @@ const (
 )
 
 const (
-	defaultHealthCheckInterval = 10
-	minHealthCheckInterval     = 1
+	defaultHealthCheckInterval = 10 * time.Second
+	minHealthCheckInterval     = 1 * time.Second
 	defaultPosThreshold        = 10000
 	minPosThreshold            = 1000
 
-	defaultHealthGracePeriod = time.Second * 5
+	defaultHealthGracePeriod = 5 * time.Second
 )
 
 type StatusMsg struct {
@@ -70,7 +70,7 @@ type healthInfo struct {
 	lastStatus   HealthStatus
 }
 
-func newHealthInfo(checkInterval int, posThreshold int) *healthInfo {
+func newHealthInfo(checkInterval time.Duration, posThreshold int) *healthInfo {
 	if checkInterval < minHealthCheckInterval {
 		checkInterval = defaultHealthCheckInterval
 	}
@@ -78,7 +78,7 @@ func newHealthInfo(checkInterval int, posThreshold int) *healthInfo {
 		posThreshold = defaultPosThreshold
 	}
 	h := &healthInfo{
-		checkInterval: time.Duration(checkInterval) * time.Second,
+		checkInterval: checkInterval,
 		posThreshold:  posThreshold,
 	}
 	return h
