@@ -45,19 +45,13 @@ func New(host string, port int64, user string, password string,
 		canal:      _canal,
 		syncChan:   make(chan *EventData, 4094),
 		statusChan: make(chan *StatusMsg, 64),
-		exitChan:   make(chan struct{}, 1),
+		exitChan:   make(chan struct{}, 2),
 	}
 	return r, nil
 }
 
 func (r *River) SetHandler(handler Handler) {
 	r.handler = handler
-}
-
-func (r *River) Close() {
-	r.canal.Close()
-	r.masterInfo.Close()
-	r.handler.OnClose(r)
 }
 
 func (r *River) GetFilePosition() mysql.Position {
@@ -70,82 +64,6 @@ func (r *River) GetDBPosition() (pos mysql.Position, err error) {
 		return pos, errors.Trace(err)
 	}
 	return pos, nil
-}
-
-// To avoid false alarms, need to sleep for a period of time, then take the result again and compare it again
-func (r *River) recheckFilePos(preFilePos *mysql.Position) (pass bool) {
-	time.Sleep(defaultHealthGracePeriod)
-	curFilePos := r.GetFilePosition()
-	return curFilePos.Compare(*preFilePos) == 1
-}
-
-// healthCheck 检测健康状态
-// 当获取 db-pos 失败时, 健康状态为 red
-// 当 db-pos 跟 file-pos 相差在阈值内, 健康状态为 green
-// 当 db-pos 跟 file-pos 相关在阈值外时, 健康状态为 yellow
-// 当 db-pos 跟 上次记录的 db-pos 没有变化时，且file-pos 跟 上次记录的 file-pos 没有变化时，且 db-pos 跟 file-pos 相等时 健康状态为 green
-// 当 db-pos 跟 上次记录的 db-pos 没有变化时，且file-pos 跟 上次记录的 file-pos 没有变化时，且 db-pos 大于 file-pos 时 健康状态为 red
-// 当 db-pos 跟 上次记录的 db-pos 没有变化时，且file-pos 跟 上次记录的 file-pos 有变化时, 健康状态为 green
-// 当 db-pos 跟 上次记录的 db-pos 有变化时, 且 file-pos 跟 上次记录的 file-pos 没有变化时, 健康状态为 red
-// 当 db-pos 跟 上次记录的 db-pos 有变化时, 且 file-pos 跟 上次记录的 file-pos 有变化时, 健康状态为 green
-// 最终根据各个判读条件得到的状态值，以最差的状态值作为最终健康状态
-func (r *River) healthCheck() {
-	status := healthStatusGreen
-	var reasons []string
-
-	filePos := r.GetFilePosition()
-	dbPos, err := r.GetDBPosition()
-	if err != nil {
-		reason := []string{ReasonGetPosError + err.Error()}
-		r.statusChan <- r.healthInfo.NewMsg(healthStatusRed, reason, &filePos, &dbPos)
-		return
-	}
-	if r.healthInfo.lastDBPos == nil {
-		r.healthInfo.lastDBPos = &dbPos
-	}
-	if r.healthInfo.lastFilePos == nil {
-		r.healthInfo.lastFilePos = &filePos
-	}
-
-	startPos := filePos.Pos
-	if filePos.Name != dbPos.Name { // 已经更换binlog文件
-		startPos = 0
-	}
-	if startPos+uint32(r.healthInfo.posThreshold) < dbPos.Pos {
-		status.ChooseWorse(healthStatusYellow)
-		reasons = append(reasons, ReasonExceedThreshold)
-	}
-
-	if r.healthInfo.dbMakeNoProgress(&dbPos) {
-		if r.healthInfo.fileMakeNoProgress(&filePos) && !r.healthInfo.Equal(&dbPos, &filePos) &&
-			!r.recheckFilePos(&filePos) {
-			status.ChooseWorse(healthStatusRed)
-			reasons = append(reasons, ReasonStopApproaching)
-		}
-	} else {
-		if r.healthInfo.fileMakeNoProgress(&filePos) && !r.recheckFilePos(&filePos) {
-			status.ChooseWorse(healthStatusRed)
-			reasons = append(reasons, ReasonStopSync)
-		}
-	}
-	r.statusChan <- r.healthInfo.NewMsg(status, reasons, &filePos, &dbPos)
-}
-
-func (r *River) HealthCheck() {
-	// TODO 去除sleep
-	//time.Sleep(5 * time.Second)
-	ticker := time.NewTicker(r.healthInfo.checkInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			r.healthCheck()
-		case msg := <-r.statusChan:
-			if err := r.healthInfo.Update(msg, r.handler.OnAlert); err != nil {
-				r.exitChan <- struct{}{}
-			}
-		}
-	}
 }
 
 func (r *River) updatePos(nextLog string, nextPos uint32, currentGTID string) {
@@ -297,36 +215,127 @@ func (r *River) OnPosSynced(header *replication.EventHeader, pos mysql.Position,
 	return nil
 }
 
-func (r *River) HandleEvent(handler Handler) {
-	ticker := time.NewTicker(r.masterInfo.saveInterval)
-	defer ticker.Stop()
+func (r *River) OnClose(onClose func(r *River)) {
+	r.canal.Close()
+	r.masterInfo.Close()
+	onClose(r)
+}
 
-	binlogName, binlogPas := r.masterInfo.Name, r.masterInfo.Pos
+func (r *River) Exit() {
+	// 连发两条,因为需要关闭 r.Handle 和 r.HealthCheck 两个 goroutine
+	r.exitChan <- struct{}{}
+	r.exitChan <- struct{}{}
+}
+
+// To avoid false alarms, need to sleep for a period of time, then take the result again and compare it again
+func (r *River) recheckFilePos(preFilePos *mysql.Position) (pass bool) {
+	time.Sleep(defaultHealthGracePeriod)
+	curFilePos := r.GetFilePosition()
+	return curFilePos.Compare(*preFilePos) == 1
+}
+
+// healthCheck 检测健康状态
+// 当获取 db-pos 失败时, 健康状态为 red
+// 当 db-pos 跟 file-pos 相差在阈值内, 健康状态为 green
+// 当 db-pos 跟 file-pos 相关在阈值外时, 健康状态为 yellow
+// 当 db-pos 跟 上次记录的 db-pos 没有变化时，且file-pos 跟 上次记录的 file-pos 没有变化时，且 db-pos 跟 file-pos 相等时 健康状态为 green
+// 当 db-pos 跟 上次记录的 db-pos 没有变化时，且file-pos 跟 上次记录的 file-pos 没有变化时，且 db-pos 大于 file-pos 时 健康状态为 red
+// 当 db-pos 跟 上次记录的 db-pos 没有变化时，且file-pos 跟 上次记录的 file-pos 有变化时, 健康状态为 green
+// 当 db-pos 跟 上次记录的 db-pos 有变化时, 且 file-pos 跟 上次记录的 file-pos 没有变化时, 健康状态为 red
+// 当 db-pos 跟 上次记录的 db-pos 有变化时, 且 file-pos 跟 上次记录的 file-pos 有变化时, 健康状态为 green
+// 最终根据各个判读条件得到的状态值，以最差的状态值作为最终健康状态
+func (r *River) healthCheck() {
+	status := healthStatusGreen
+	var reasons []string
+
+	filePos := r.GetFilePosition()
+	dbPos, err := r.GetDBPosition()
+	if err != nil {
+		reason := []string{ReasonGetPosError + err.Error()}
+		r.statusChan <- r.healthInfo.NewMsg(healthStatusRed, reason, &filePos, &dbPos)
+		return
+	}
+	if r.healthInfo.lastDBPos == nil {
+		r.healthInfo.lastDBPos = &dbPos
+	}
+	if r.healthInfo.lastFilePos == nil {
+		r.healthInfo.lastFilePos = &filePos
+	}
+
+	startPos := filePos.Pos
+	if filePos.Name != dbPos.Name { // 已经更换binlog文件
+		startPos = 0
+	}
+	if startPos+uint32(r.healthInfo.posThreshold) < dbPos.Pos {
+		status.ChooseWorse(healthStatusYellow)
+		reasons = append(reasons, ReasonExceedThreshold)
+	}
+
+	if r.healthInfo.dbMakeNoProgress(&dbPos) {
+		if r.healthInfo.fileMakeNoProgress(&filePos) && !r.healthInfo.Equal(&dbPos, &filePos) &&
+			!r.recheckFilePos(&filePos) {
+			status.ChooseWorse(healthStatusRed)
+			reasons = append(reasons, ReasonStopApproaching)
+		}
+	} else {
+		if r.healthInfo.fileMakeNoProgress(&filePos) && !r.recheckFilePos(&filePos) {
+			status.ChooseWorse(healthStatusRed)
+			reasons = append(reasons, ReasonStopSync)
+		}
+	}
+	r.statusChan <- r.healthInfo.NewMsg(status, reasons, &filePos, &dbPos)
+}
+
+func (r *River) HealthCheck(onAlert func(msg *StatusMsg) error) {
+	time.Sleep(5 * time.Second)
+	healthCheckTicker := time.NewTicker(r.healthInfo.checkInterval)
+	defer healthCheckTicker.Stop()
+	for {
+		select {
+		case <-healthCheckTicker.C:
+			r.healthCheck()
+		case <-r.exitChan:
+			return
+		case msg := <-r.statusChan:
+			if needAlert := r.healthInfo.Update(msg); needAlert {
+				go func() {
+					if err := onAlert(msg); err != nil {
+						r.Exit()
+					}
+				}()
+			}
+		}
+	}
+}
+
+func (r *River) Handle(startPos mysql.Position, onEvent func(event *EventData) error, onClose func(r *River)) {
+	savePosTicker := time.NewTicker(r.masterInfo.saveInterval)
+	defer savePosTicker.Stop()
+
+	binlogName, binlogPas := startPos.Name, startPos.Pos
 	for {
 		needSavePos := false
 		select {
-		case <-ticker.C:
+		case <-savePosTicker.C:
 			needSavePos = true
 		case <-r.exitChan:
-			r.Close()
+			r.OnClose(onClose)
 			return
 		case event := <-r.syncChan:
 			binlogName, binlogPas = event.LogName, event.LogPos
 			if event.EventType == EventTypeRotate || event.EventType == EventTypeDDL {
 				needSavePos = true
 			}
-			if err := handler.OnEvent(event); err != nil {
-				r.exitChan <- struct{}{}
+			if err := onEvent(event); err != nil {
+				r.Exit()
 			}
 		}
 
 		if needSavePos {
-			fmt.Println(binlogName, binlogPas)
-			// TODO 去除注释
-			//if err := r.masterInfo.Save(binlogName, binlogPas); err != nil {
-			//	// 无法正常写入,直接退出
-			//	r.exitChan <- struct{}{}
-			//}
+			if err := r.masterInfo.Save(binlogName, binlogPas); err != nil {
+				// 无法正常写入,直接退出
+				r.Exit()
+			}
 		}
 	}
 }
@@ -339,20 +348,19 @@ const (
 )
 
 func (r *River) RunFrom(from From) (err error) {
-	go r.HandleEvent(r.handler)
-	go r.HealthCheck()
-
-	start := r.GetFilePosition()
-	if from == FromMasterPos || len(start.Name) == 0 || start.Pos == 0 {
-		if start, err = r.GetDBPosition(); err != nil {
+	fmt.Println(logo)
+	startPos := r.GetFilePosition()
+	if from == FromMasterPos || len(startPos.Name) == 0 || startPos.Pos == 0 {
+		if startPos, err = r.GetDBPosition(); err != nil {
 			return errors.Trace(err)
 		}
 	}
 
-	fmt.Println(logo)
+	go r.Handle(startPos, r.handler.OnEvent, r.handler.OnClose)
+	go r.HealthCheck(r.handler.OnAlert)
 
 	r.canal.SetEventHandler(r)
-	if err := r.canal.RunFrom(start); err != nil {
+	if err := r.canal.RunFrom(startPos); err != nil {
 		return errors.Trace(err)
 	}
 	return nil

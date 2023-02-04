@@ -15,7 +15,7 @@ func PanicIfError(err error) {
 }
 
 func Kafka() {
-	r, err := river.New("127.0.0.1", 3306, "root", "root", "./", 0, 5, 3)
+	r, err := river.New("127.0.0.1", 3306, "root", "root", "./", 0, 5, 3000)
 	PanicIfError(err)
 
 	handler, err := kafka.New([]string{"127.0.0.1:9092"}, "binlog")
@@ -34,7 +34,7 @@ func Kafka() {
 }
 
 func TraceLog() {
-	r, err := river.New("127.0.0.1", 3306, "root", "root", "./", 0, 5, 3)
+	r, err := river.New("127.0.0.1", 3306, "root", "root", "./", 0, 5, 3000)
 	PanicIfError(err)
 	handler := trace_log.New([]string{"testdb01"}, false, true, true)
 	r.SetHandler(handler)
@@ -46,7 +46,7 @@ func Base() {
 	r, err := river.New(
 		"127.0.0.1", 3306, "root", "root",
 		"./", 0,
-		5, 3)
+		5, 3000)
 	PanicIfError(err)
 	r.SetHandler(river.NopCloserAlerter(func(event *river.EventData) error {
 		fmt.Println(event.EventType, event.LogName, event.LogPos, event.Before, event.After)
@@ -57,7 +57,7 @@ func Base() {
 }
 
 func main() {
-	Base()
-	//TraceLog()
+	//Base()
+	TraceLog()
 	//Kafka()
 }

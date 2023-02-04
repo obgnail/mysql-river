@@ -2,7 +2,7 @@ package river
 
 import (
 	"github.com/go-mysql-org/go-mysql/mysql"
-	"github.com/juju/errors"
+	"sync"
 	"time"
 )
 
@@ -35,10 +35,10 @@ func (h *HealthStatus) ChooseWorse(status HealthStatus) {
 }
 
 const (
-	ReasonGetPosError     = "failed to get db-pos"                                                     // red
-	ReasonExceedThreshold = "The diff between db-pos and file-pos exceeds the threshold"               // yellow
-	ReasonStopApproaching = "both of db-pos and file-pos make no progress, but file-pos behind db-pos" // red
-	ReasonStopSync        = "db-pos makes progress while file-pos not"                                 // red
+	ReasonGetPosError     = "failed to get db-pos."                                                     // red
+	ReasonExceedThreshold = "The diff between db-pos and file-pos exceeds the threshold."               // yellow
+	ReasonStopApproaching = "both of db-pos and file-pos make no progress, but file-pos behind db-pos." // red
+	ReasonStopSync        = "db-pos makes progress while file-pos not."                                 // red
 )
 
 const (
@@ -63,9 +63,11 @@ type StatusMsg struct {
 type healthInfo struct {
 	checkInterval time.Duration
 	posThreshold  int // byte num
-	lastFilePos   *mysql.Position
-	lastDBPos     *mysql.Position
-	lastStatus    HealthStatus
+
+	sync.RWMutex // protect below
+	lastFilePos  *mysql.Position
+	lastDBPos    *mysql.Position
+	lastStatus   HealthStatus
 }
 
 func newHealthInfo(checkInterval int, posThreshold int) *healthInfo {
@@ -82,17 +84,20 @@ func newHealthInfo(checkInterval int, posThreshold int) *healthInfo {
 	return h
 }
 
-func (h *healthInfo) Update(msg *StatusMsg, onAlert func(msg *StatusMsg) error) error {
-	if h.NeedAlert(msg.Status) {
-		return errors.Trace(onAlert(msg))
-	}
+func (h *healthInfo) Update(msg *StatusMsg) (needAlert bool) {
+	h.Lock()
+	defer h.Unlock()
+	// 状态发生改变,并且改变后的状态不是green
+	needAlert = h.lastStatus != msg.Status && msg.Status != healthStatusGreen
 	h.lastStatus = msg.Status
 	h.lastFilePos = msg.FilePos
 	h.lastDBPos = msg.DBPos
-	return nil
+	return
 }
 
 func (h *healthInfo) NewMsg(status HealthStatus, reason []string, filePos, dbPos *mysql.Position) *StatusMsg {
+	h.RLock()
+	defer h.RUnlock()
 	return &StatusMsg{
 		Status:        status,
 		LastStatus:    h.lastStatus,
@@ -104,16 +109,15 @@ func (h *healthInfo) NewMsg(status HealthStatus, reason []string, filePos, dbPos
 	}
 }
 
-// NeedAlert 状态发生改变,并且改变后的状态不是green
-func (h *healthInfo) NeedAlert(curStatus HealthStatus) bool {
-	return h.lastStatus != curStatus && curStatus != healthStatusGreen
-}
-
 func (h *healthInfo) dbMakeNoProgress(dbPos *mysql.Position) bool {
+	h.RLock()
+	defer h.RUnlock()
 	return dbPos.Name == h.lastDBPos.Name && dbPos.Pos == h.lastDBPos.Pos
 }
 
 func (h *healthInfo) fileMakeNoProgress(filePos *mysql.Position) bool {
+	h.RLock()
+	defer h.RUnlock()
 	return filePos.Name == h.lastFilePos.Name && filePos.Pos == h.lastFilePos.Pos
 }
 

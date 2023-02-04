@@ -11,6 +11,8 @@ type KafkaHandler struct {
 	addrs []string
 
 	producer sarama.SyncProducer
+
+	river.NopCloserAlerter
 }
 
 var _ river.Handler = (*KafkaHandler)(nil)
@@ -29,14 +31,6 @@ func New(addrs []string, topic string) (*KafkaHandler, error) {
 
 func (h *KafkaHandler) String() string {
 	return "kafka"
-}
-
-func (h *KafkaHandler) OnAlert(msg *river.StatusMsg) error {
-	return nil
-}
-
-func (h *KafkaHandler) OnClose(r *river.River) {
-	return
 }
 
 func (h *KafkaHandler) OnEvent(event *river.EventData) error {
