@@ -24,6 +24,8 @@ type River struct {
 	healthInfo *healthInfo // 记录masterInfo和canal.GetMasterPos()的差距,可对接告警机制
 	canal      *canal.Canal
 
+	Error error
+
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -42,12 +44,28 @@ func (r *River) SetHandler(handler Handler) *River {
 	return r
 }
 
-func (r *River) Sync(from From) (err error) {
+func (r *River) PrintConfig(from From) {
 	fmt.Println(logo)
-	fmt.Printf("From:\t%+v\n", from)
-	fmt.Printf("MySQLConfig:\t%+v\n", r.config.MySQLConfig)
-	fmt.Printf("PosAutoSaver:\t%+v\n", r.config.PosAutoSaver)
-	fmt.Printf("HealthChecker:\t%+v\n", r.config.HealthChecker)
+	temp := *r.config.MySQLConfig
+	temp.Password = ""
+	fmt.Printf(`
+Handler            :  %+v
+From               :  %+v
+MySQLConfig        :  %+v
+PosAutoSaverConfig :  %+v
+HealthCheckerConfig:  %+v
+--------------------
+`,
+		r.handler.String(),
+		from,
+		temp,
+		*r.config.PosAutoSaverConfig,
+		*r.config.HealthCheckerConfig,
+	)
+}
+
+func (r *River) Sync(from From) (err error) {
+	r.PrintConfig(from)
 
 	if err = r.prepare(); err != nil {
 		return errors.Trace(err)
@@ -72,8 +90,8 @@ func (r *River) Sync(from From) (err error) {
 
 func (r *River) prepare() (err error) {
 	db := r.config.MySQLConfig
-	saver := r.config.PosAutoSaver
-	checker := r.config.HealthChecker
+	saver := r.config.PosAutoSaverConfig
+	checker := r.config.HealthCheckerConfig
 
 	r.canal, err = newCanal(db.Host, db.Port, db.User, db.Password)
 	if err != nil {
@@ -91,7 +109,7 @@ func (r *River) prepare() (err error) {
 }
 
 func (r *River) GetFilePosition() mysql.Position {
-	return r.masterInfo.Position()
+	return r.masterInfo.position()
 }
 
 func (r *River) GetDBPosition() (pos mysql.Position, err error) {
@@ -247,15 +265,16 @@ func (r *River) OnTableChanged(header *replication.EventHeader, schema string, t
 }
 
 // OnPosSynced 监听binlog日志的变化文件与记录的位置,不使用此函数,因为从master.info恢复时不会触发此函数
-func (r *River) OnPosSynced(header *replication.EventHeader, pos mysql.Position, set mysql.GTIDSet, force bool) error {
+func (r *River) OnPosSynced(*replication.EventHeader, mysql.Position, mysql.GTIDSet, bool) error {
 	return nil
 }
 
-func (r *River) Close() {
+func (r *River) Close(err error) {
 	Logger.Info("closing river")
 	r.canal.Close()
 	r.masterInfo.Close()
 	r.cancel()
+	r.Error = err
 	r.handler.OnClose(r)
 }
 
@@ -285,7 +304,7 @@ func (r *River) healthCheck() {
 	dbPos, err := r.GetDBPosition()
 	if err != nil {
 		reason := []string{ReasonGetPosError + err.Error()}
-		r.statusChan <- r.healthInfo.NewMsg(healthStatusRed, reason, &filePos, &dbPos)
+		r.statusChan <- r.healthInfo.newMsg(healthStatusRed, reason, &filePos, &dbPos)
 		return
 	}
 	if r.healthInfo.lastDBPos == nil {
@@ -300,23 +319,23 @@ func (r *River) healthCheck() {
 		startPos = 0
 	}
 	if startPos+uint32(r.healthInfo.posThreshold) < dbPos.Pos {
-		status.ChooseWorse(healthStatusYellow)
+		status.Worse(healthStatusYellow)
 		reasons = append(reasons, ReasonExceedThreshold)
 	}
 
 	if r.healthInfo.dbMakeNoProgress(&dbPos) {
-		if r.healthInfo.fileMakeNoProgress(&filePos) && !r.healthInfo.Equal(&dbPos, &filePos) &&
+		if r.healthInfo.fileMakeNoProgress(&filePos) && !r.healthInfo.equal(&dbPos, &filePos) &&
 			!r.recheckFilePos(&filePos) {
-			status.ChooseWorse(healthStatusRed)
+			status.Worse(healthStatusRed)
 			reasons = append(reasons, ReasonStopApproaching)
 		}
 	} else {
 		if r.healthInfo.fileMakeNoProgress(&filePos) && !r.recheckFilePos(&filePos) {
-			status.ChooseWorse(healthStatusRed)
+			status.Worse(healthStatusRed)
 			reasons = append(reasons, ReasonStopSync)
 		}
 	}
-	r.statusChan <- r.healthInfo.NewMsg(status, reasons, &filePos, &dbPos)
+	r.statusChan <- r.healthInfo.newMsg(status, reasons, &filePos, &dbPos)
 	Logger.Debugf("health checked: [%s]", status)
 }
 
@@ -332,10 +351,10 @@ func (r *River) loopHealthCheck(onAlert func(msg *StatusMsg) error) {
 		case <-ticker.C:
 			r.healthCheck()
 		case msg := <-r.statusChan:
-			if needAlert := r.healthInfo.Update(msg); needAlert {
+			if needAlert := r.healthInfo.update(msg); needAlert {
 				go func() {
 					if err := onAlert(msg); err != nil {
-						r.Close()
+						r.Close(err)
 					}
 				}()
 			}
@@ -362,14 +381,14 @@ func (r *River) loopSync(startPos mysql.Position, onEvent func(event *EventData)
 				needSavePos = true
 			}
 			if err := onEvent(event); err != nil {
-				r.Close()
+				r.Close(err)
 			}
 		}
 
 		if needSavePos {
 			Logger.Debugf("position auto save at: [%s:%d]", logName, logPas)
-			if err := r.masterInfo.Save(logName, logPas); err != nil {
-				r.Close() // 无法正常写入,直接退出
+			if err := r.masterInfo.save(logName, logPas); err != nil {
+				r.Close(err) // 无法正常写入,直接退出
 			}
 		}
 	}
@@ -404,12 +423,10 @@ func buildFields(columns []schema.TableColumn, fields []interface{}) map[string]
 }
 
 const logo = `
-
 ███╗   ███╗██╗   ██╗███████╗ ██████╗ ██╗         ██████╗ ██╗██╗   ██╗███████╗██████╗ 
 ████╗ ████║╚██╗ ██╔╝██╔════╝██╔═══██╗██║         ██╔══██╗██║██║   ██║██╔════╝██╔══██╗
 ██╔████╔██║ ╚████╔╝ ███████╗██║   ██║██║         ██████╔╝██║██║   ██║█████╗  ██████╔╝
 ██║╚██╔╝██║  ╚██╔╝  ╚════██║██║▄▄ ██║██║         ██╔══██╗██║╚██╗ ██╔╝██╔══╝  ██╔══██╗
 ██║ ╚═╝ ██║   ██║   ███████║╚██████╔╝███████╗    ██║  ██║██║ ╚████╔╝ ███████╗██║  ██║
 ╚═╝     ╚═╝   ╚═╝   ╚══════╝ ╚══▀▀═╝ ╚══════╝    ╚═╝  ╚═╝╚═╝  ╚═══╝  ╚══════╝╚═╝  ╚═╝
-
 `

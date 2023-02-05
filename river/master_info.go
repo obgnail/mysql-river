@@ -63,7 +63,7 @@ func loadMasterInfo(dataDir string, saveInterval time.Duration) (*masterInfo, er
 	return &m, errors.Trace(err)
 }
 
-func (m *masterInfo) Position() mysql.Position {
+func (m *masterInfo) position() mysql.Position {
 	m.RLock()
 	pos := mysql.Position{Name: m.Name, Pos: m.Pos}
 	m.RUnlock()
@@ -71,8 +71,8 @@ func (m *masterInfo) Position() mysql.Position {
 }
 
 func (m *masterInfo) Close() error {
-	pos := m.Position()
-	err := m.Save(pos.Name, pos.Pos)
+	pos := m.position()
+	err := m.save(pos.Name, pos.Pos)
 	return errors.Trace(err)
 }
 
@@ -80,7 +80,7 @@ func (m *masterInfo) CanSave(saveTime time.Time) bool {
 	return saveTime.Sub(m.lastSaveTime) > m.saveInterval
 }
 
-func (m *masterInfo) Save(name string, pos uint32) error {
+func (m *masterInfo) save(name string, pos uint32) error {
 	m.Lock()
 	defer m.Unlock()
 

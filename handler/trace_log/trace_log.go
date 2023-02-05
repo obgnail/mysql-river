@@ -27,7 +27,7 @@ type TraceLogHandler struct {
 	highlight    bool // sql highlight
 	dbs          map[string]struct{}
 
-	river.NopCloser
+	river.NopCloserAlerter
 }
 
 var _ river.Handler = (*TraceLogHandler)(nil)
@@ -43,11 +43,6 @@ func New(dbs []string, entireFields, showTxMsg, highlight bool) *TraceLogHandler
 
 func (t *TraceLogHandler) String() string {
 	return "trace log"
-}
-
-func (t *TraceLogHandler) OnAlert(msg *river.StatusMsg) error {
-	fmt.Println("-- OnAlert --", msg)
-	return nil
 }
 
 func (t *TraceLogHandler) OnEvent(event *river.EventData) error {

@@ -9,20 +9,20 @@ type MySQLConfig struct {
 	Password string
 }
 
-type PosAutoSaver struct {
+type PosAutoSaverConfig struct {
 	SaveDir      string
 	SaveInterval time.Duration
 }
 
-type HealthChecker struct {
+type HealthCheckerConfig struct {
 	CheckInterval     time.Duration
 	CheckPosThreshold int
 }
 
 type Config struct {
 	*MySQLConfig
-	*PosAutoSaver
-	*HealthChecker
+	*PosAutoSaverConfig
+	*HealthCheckerConfig
 }
 
 type From string

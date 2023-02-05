@@ -16,7 +16,7 @@ const (
 
 var levelList = []HealthStatus{healthStatusGreen, healthStatusYellow, healthStatusRed}
 
-func (h *HealthStatus) toLevel() int {
+func (h *HealthStatus) ToLevel() int {
 	for i, status := range levelList {
 		if status == *h {
 			return i
@@ -25,20 +25,20 @@ func (h *HealthStatus) toLevel() int {
 	return 0
 }
 
-func (h *HealthStatus) ChooseWorse(status HealthStatus) {
+func (h *HealthStatus) Worse(status HealthStatus) {
 	if status == *h {
 		return
 	}
-	if status.toLevel() > h.toLevel() {
+	if status.ToLevel() > h.ToLevel() {
 		*h = status
 	}
 }
 
 const (
-	ReasonGetPosError     = "failed to get db-pos."                                                     // red
-	ReasonExceedThreshold = "The diff between db-pos and file-pos exceeds the threshold."               // yellow
-	ReasonStopApproaching = "both of db-pos and file-pos make no progress, but file-pos behind db-pos." // red
-	ReasonStopSync        = "db-pos makes progress while file-pos not."                                 // red
+	ReasonGetPosError     = "failed to get db-pos."                                                           // red
+	ReasonExceedThreshold = "The diff between db-pos and file-pos exceeds the threshold."                     // yellow
+	ReasonStopApproaching = "both of db-pos and file-pos make no progress, but file-pos still behind db-pos." // red
+	ReasonStopSync        = "db-pos makes progress while file-pos not."                                       // red
 )
 
 const (
@@ -84,7 +84,7 @@ func newHealthInfo(checkInterval time.Duration, posThreshold int) *healthInfo {
 	return h
 }
 
-func (h *healthInfo) Update(msg *StatusMsg) (needAlert bool) {
+func (h *healthInfo) update(msg *StatusMsg) (needAlert bool) {
 	h.Lock()
 	defer h.Unlock()
 	// 状态发生改变,并且改变后的状态不是green
@@ -95,7 +95,7 @@ func (h *healthInfo) Update(msg *StatusMsg) (needAlert bool) {
 	return
 }
 
-func (h *healthInfo) NewMsg(status HealthStatus, reason []string, filePos, dbPos *mysql.Position) *StatusMsg {
+func (h *healthInfo) newMsg(status HealthStatus, reason []string, filePos, dbPos *mysql.Position) *StatusMsg {
 	h.RLock()
 	defer h.RUnlock()
 	return &StatusMsg{
@@ -121,6 +121,6 @@ func (h *healthInfo) fileMakeNoProgress(filePos *mysql.Position) bool {
 	return filePos.Name == h.lastFilePos.Name && filePos.Pos == h.lastFilePos.Pos
 }
 
-func (h *healthInfo) Equal(dbPos, filePos *mysql.Position) bool {
+func (h *healthInfo) equal(dbPos, filePos *mysql.Position) bool {
 	return filePos.Name == dbPos.Name && filePos.Pos == dbPos.Pos
 }
