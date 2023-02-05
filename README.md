@@ -1,4 +1,6 @@
-# MySQL-River
+# MySQL River
+
+![mysql-river](assets/mysql-river.png)
 
 ## introduction
 
