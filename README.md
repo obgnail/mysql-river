@@ -1,7 +1,7 @@
-# MySQL River
+# Mysql River
 
 <div align="center">
-  <img src="assets/mysql-river.png" alt="worktop" width="230" />
+  <img src="assets/mysql-river.png" alt="worktop" width="400" />
 </div>
 
 ## introduction
