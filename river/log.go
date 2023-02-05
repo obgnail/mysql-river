@@ -10,7 +10,7 @@ var Logger *logrus.Logger
 func init() {
 	Logger = &logrus.Logger{
 		Out:   os.Stderr,
-		Level: logrus.DebugLevel,
+		Level: logrus.WarnLevel,
 		Formatter: &logrus.TextFormatter{
 			ForceColors:               true,
 			EnvironmentOverrideColors: true,

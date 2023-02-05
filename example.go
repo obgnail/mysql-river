@@ -87,7 +87,7 @@ func Base() {
 
 func main() {
 	//Base()
-	//TraceLog()
+	TraceLog()
 	//Kafka()
-	ElasticSearch()
+	//ElasticSearch()
 }

@@ -130,7 +130,7 @@ func main() {
 
 ### trace log
 
-![image-20220709171510793](assets/image-20220709171510793.png)
+![image-20230205212745428](assets/image-20230205212745428.png)
 
 ```go
 var config = &river.Config{
