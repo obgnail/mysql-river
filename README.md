@@ -156,7 +156,7 @@ func main() {
 	showTxMsg := true     // show transition msg in sql
 	highlight := true     //  highlight sql expression
 	handler := trace_log.New(dbs, entireFields, showTxMsg, highlight)
-	err := river.New(config).SetHandler(handler).Sync(river.FromFile) // 从最新位置开始解析
+	err := river.New(config).SetHandler(handler).Sync(river.FromDB) // 从最新位置开始解析
 	PanicIfError(err)
 }
 ```
