@@ -1,6 +1,8 @@
 # MySQL River
 
-![mysql-river](assets/mysql-river.png)
+<div align="center">
+  <img src="assets/mysql-river.png" alt="worktop" width="230" />
+</div>
 
 ## introduction
 
