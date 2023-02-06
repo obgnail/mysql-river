@@ -154,7 +154,11 @@ func (r *River) OnRotate(header *replication.EventHeader, e *replication.RotateE
 }
 
 func (r *River) OnDDL(header *replication.EventHeader, nextPos mysql.Position, e *replication.QueryEvent) error {
-	r.updatePos(nextPos.Name, nextPos.Pos, e.GSet.String())
+	curGTID := ""
+	if e.GSet != nil {
+		curGTID = e.GSet.String()
+	}
+	r.updatePos(nextPos.Name, nextPos.Pos, curGTID)
 	r.syncChan <- &EventData{
 		ServerID:  header.ServerID,
 		LogName:   r.nextLog,

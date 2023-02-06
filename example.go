@@ -81,13 +81,13 @@ func Base() {
 			fmt.Println(event.EventType, event.LogName, event.LogPos, event.Before, event.After)
 			return nil
 		})).
-		Sync(river.FromFile) // 从 master.info 文件开始解析
+		Sync(river.FromDB)
 	PanicIfError(err)
 }
 
 func main() {
-	//Base()
-	TraceLog()
+	Base()
+	//TraceLog()
 	//Kafka()
 	//ElasticSearch()
 }
