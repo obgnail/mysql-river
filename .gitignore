@@ -1,3 +1,4 @@
 .idea/
 master.info
+kafka_offset.bolt
 *.xcf

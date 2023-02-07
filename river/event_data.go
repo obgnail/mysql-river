@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/canal"
+	"github.com/juju/errors"
 )
 
 const (
@@ -33,14 +34,14 @@ type EventData struct {
 	Timestamp uint32                 `json:"timestamp"` // 事件时间
 }
 
-func (d *EventData) Position() string {
-	return fmt.Sprintf("%s:%d", d.LogName, d.LogPos)
+func (e *EventData) Position() string {
+	return fmt.Sprintf("%s:%d", e.LogName, e.LogPos)
 }
 
-func (d *EventData) ToBytes() ([]byte, error) {
-	b, err := json.Marshal(d)
+func Event2Bytes(e *EventData) ([]byte, error) {
+	b, err := json.Marshal(e)
 	if err != nil {
-		return []byte{}, nil
+		return []byte{}, errors.Trace(err)
 	}
 	return b, nil
 }

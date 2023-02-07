@@ -34,9 +34,14 @@ func PanicIfError(err error) {
 }
 
 func Kafka() {
-	addrs := []string{"127.0.0.1:9092"}
-	topic := "binlog"
-	handler, err := kafka.New(addrs, topic)
+	kafkaConfig := &kafka.Config{
+		Addrs:           []string{"127.0.0.1:9092"},
+		Topic:           "binlog",
+		OffsetStoreDir:  "./",
+		Offset:          nil,
+		UseOldestOffset: false,
+	}
+	handler, err := kafka.New(kafkaConfig)
 	PanicIfError(err)
 	go handler.Consume(func(msg *sarama.ConsumerMessage) error {
 		fmt.Printf("Partition:%d, Offset:%d, key:%s, value:%s\n",
@@ -86,8 +91,8 @@ func Base() {
 }
 
 func main() {
-	Base()
+	//Base()
 	//TraceLog()
-	//Kafka()
+	Kafka()
 	//ElasticSearch()
 }

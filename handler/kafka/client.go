@@ -1,6 +1,7 @@
 package kafka
 
 import (
+	"fmt"
 	"github.com/Shopify/sarama"
 	"github.com/juju/errors"
 	"sync"
@@ -33,7 +34,24 @@ func SendMessage(producer sarama.SyncProducer, topic string, content []byte) (pa
 	return
 }
 
-func Consume(addrs []string, topic string, f func(msg *sarama.ConsumerMessage) error) error {
+func NewestOffsetGetter(int32) (int64, error) {
+	return sarama.OffsetNewest, nil
+}
+
+func OldestOffsetGetter(int32) (int64, error) {
+	return sarama.OffsetOldest, nil
+}
+
+func Consume(addrs []string, topic string,
+	getOffsetFunc func(partition int32) (int64, error),
+	consumeFunc func(msg *sarama.ConsumerMessage) error) error {
+	if getOffsetFunc == nil {
+		getOffsetFunc = NewestOffsetGetter
+	}
+	if consumeFunc == nil {
+		return fmt.Errorf("has no getOffsetFunc")
+	}
+
 	consumer, err := sarama.NewConsumer(addrs, nil)
 	if err != nil {
 		return errors.Trace(err)
@@ -44,15 +62,19 @@ func Consume(addrs []string, topic string, f func(msg *sarama.ConsumerMessage) e
 	}
 	var wg sync.WaitGroup
 	for partition := range partitionList {
-		pc, err := consumer.ConsumePartition(topic, int32(partition), sarama.OffsetNewest)
+		offset, err := getOffsetFunc(int32(partition))
+		if err != nil {
+			return fmt.Errorf("get offsetStore error: %s", err.Error())
+		}
+		pc, err := consumer.ConsumePartition(topic, int32(partition), offset)
 		if err != nil {
 			return errors.Trace(err)
 		}
-		defer pc.AsyncClose()
 		wg.Add(1)
-		go func(sarama.PartitionConsumer) { // 为每个分区开一个go协程去取值
+		go func(pc sarama.PartitionConsumer) { // 为每个分区开一个go协程去取值
+			defer pc.AsyncClose()
 			for msg := range pc.Messages() { // 阻塞直到有值发送过来，然后再继续等待
-				err = f(msg)
+				err = consumeFunc(msg)
 				errors.ErrorStack(errors.Trace(err))
 			}
 		}(pc)
