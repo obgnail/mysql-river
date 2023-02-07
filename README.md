@@ -155,11 +155,13 @@ var config = &river.Config{
 }
 
 func main() {
-	dbs := []string{"testdb01"}
-	entireFields := false // show all field message in update sql
-	showTxMsg := true     // show transition msg in sql
-	highlight := true     //  highlight sql expression
-	handler := trace_log.New(dbs, entireFields, showTxMsg, highlight)
+	traceConfig := &trace_log.Config{
+		DBs:          []string{"testdb01"},
+		EntireFields: false,
+		ShowTxMsg:    true,
+		Highlight:    true,
+	}
+	handler := trace_log.New(traceConfig)
 	err := river.New(config).SetHandler(handler).Sync(river.FromDB) // 从最新位置开始解析
 	PanicIfError(err)
 }
@@ -210,6 +212,10 @@ func main() {
 
 ### kafka broker
 
+因为引入了 kafka 这个组件，谁也不能保证 kafka 不会挂掉，进而引入了[bbolt](https://github.com/etcd-io/bbolt)，系统会自动在指定位置生成 `kafka_offset.bolt`。该文件会自动记录所有 partition 的 offset，并且在下次启动 river 的时候自动加载在此文件并自动进行偏移处理。
+
+故，此机制是透明的。
+
 ```go
 var config = &river.Config{
 	MySQLConfig: &river.MySQLConfig{
@@ -229,9 +235,14 @@ var config = &river.Config{
 }
 
 func main() {
-	addrs := []string{"127.0.0.1:9092"}
-	topic := "binlog"
-	handler, err := kafka.New(addrs, topic)
+	kafkaConfig := &kafka.Config{
+		Addrs:           []string{"127.0.0.1:9092"},
+		Topic:           "binlog",
+		OffsetStoreDir:  "./",
+		Offset:          nil,
+		UseOldestOffset: false,
+	}
+	handler, err := kafka.New(kafkaConfig)
 	PanicIfError(err)
 	go handler.Consume(func(msg *sarama.ConsumerMessage) error {
 		fmt.Printf("Partition:%d, Offset:%d, key:%s, value:%s\n",

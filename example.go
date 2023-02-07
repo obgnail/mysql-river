@@ -53,11 +53,13 @@ func Kafka() {
 }
 
 func TraceLog() {
-	dbs := []string{"testdb01"}
-	entireFields := false // show all field message in update sql
-	showTxMsg := true     // show transition msg in sql
-	highlight := true     //  highlight sql expression
-	handler := trace_log.New(dbs, entireFields, showTxMsg, highlight)
+	traceConfig := &trace_log.Config{
+		DBs:          []string{"testdb01"},
+		EntireFields: false,
+		ShowTxMsg:    true,
+		Highlight:    true,
+	}
+	handler := trace_log.New(traceConfig)
 	err := river.New(config).SetHandler(handler).Sync(river.FromDB) // 从最新位置开始解析
 	PanicIfError(err)
 }
@@ -92,7 +94,7 @@ func Base() {
 
 func main() {
 	//Base()
-	//TraceLog()
-	Kafka()
+	TraceLog()
+	//Kafka()
 	//ElasticSearch()
 }

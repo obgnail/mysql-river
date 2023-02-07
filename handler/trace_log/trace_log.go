@@ -21,24 +21,24 @@ const (
 	InvalidFormat = "[InvalidFieldValue]: '%v'"
 )
 
+type Config struct {
+	DBs          []string
+	EntireFields bool // show all field message in update sql
+	ShowTxMsg    bool // show transition msg in sql
+	Highlight    bool // sql highlight
+}
+
 type TraceLogHandler struct {
-	entireFields bool // show all field message in update sql
-	showTxMsg    bool // show transition msg in sql
-	highlight    bool // sql highlight
-	dbs          map[string]struct{}
+	config *Config
+	dbs    map[string]struct{} // map[db]struct{}
 
 	river.NopCloserAlerter
 }
 
 var _ river.Handler = (*TraceLogHandler)(nil)
 
-func New(dbs []string, entireFields, showTxMsg, highlight bool) *TraceLogHandler {
-	return &TraceLogHandler{
-		dbs:          list2map(dbs),
-		entireFields: entireFields,
-		showTxMsg:    showTxMsg,
-		highlight:    highlight,
-	}
+func New(config *Config) *TraceLogHandler {
+	return &TraceLogHandler{dbs: list2map(config.DBs), config: config}
 }
 
 func (t *TraceLogHandler) String() string {
@@ -47,20 +47,22 @@ func (t *TraceLogHandler) String() string {
 
 func (t *TraceLogHandler) OnEvent(event *river.EventData) error {
 	var data string
+
 	switch event.EventType {
 	case river.EventTypeUpdate, river.EventTypeInsert, river.EventTypeDelete:
 		data = t.handlerRow(event)
 	case river.EventTypeGTID:
-		if t.showTxMsg {
+		if t.config.ShowTxMsg {
 			data = fmt.Sprintf("/* GTID: %s */", event.GTIDSet)
 		}
 	case river.EventTypeXID:
-		if t.showTxMsg {
+		if t.config.ShowTxMsg {
 			data = fmt.Sprintf("/* XID: %s */", event.Position())
 		}
 	case river.EventTypeDDL:
 		data = event.SQL
 	}
+
 	if len(data) != 0 {
 		fmt.Println(data)
 	}
@@ -76,11 +78,11 @@ func (t *TraceLogHandler) handlerRow(event *river.EventData) (sql string) {
 
 	switch event.EventType {
 	case river.EventTypeUpdate:
-		sql = GenUpdateSql(event, t.highlight, t.entireFields)
+		sql = GenUpdateSql(event, t.config.Highlight, t.config.EntireFields)
 	case river.EventTypeInsert:
-		sql = GenInsertSql(event, t.highlight)
+		sql = GenInsertSql(event, t.config.Highlight)
 	case river.EventTypeDelete:
-		sql = GenDeleteSql(event, t.highlight)
+		sql = GenDeleteSql(event, t.config.Highlight)
 	}
 	return
 }

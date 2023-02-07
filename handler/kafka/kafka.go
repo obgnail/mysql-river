@@ -16,7 +16,7 @@ type Config struct {
 	Addrs           []string `json:"addrs"`
 	Topic           string   `json:"topic"`
 	OffsetStoreDir  string   `json:"offset_store_dir"`
-	Offset          *int64   `json:"offsetStore"` // if it has no offsetStore, set nil
+	Offset          *int64   `json:"offsetStore"` // if it has no offset, set nil
 	UseOldestOffset bool     `json:"use_oldest_offset"`
 }
 
@@ -70,30 +70,30 @@ func New(config *Config) (*Broker, error) {
 	return h, nil
 }
 
-func (h *Broker) SetHandler(eventHandler func(event *river.EventData) ([]byte, error)) {
-	h.eventHandler = eventHandler
+func (b *Broker) SetHandler(eventHandler func(event *river.EventData) ([]byte, error)) {
+	b.eventHandler = eventHandler
 }
 
-func (h *Broker) String() string {
+func (b *Broker) String() string {
 	return "kafka"
 }
 
-func (h *Broker) OnEvent(event *river.EventData) error {
-	result, err := h.eventHandler(event)
+func (b *Broker) OnEvent(event *river.EventData) error {
+	result, err := b.eventHandler(event)
 	if err != nil {
 		return errors.Trace(err)
 	}
 	if len(result) == 0 {
 		return nil
 	}
-	if _, _, err = SendMessage(h.producer, h.config.Topic, result); err != nil {
+	if _, _, err = SendMessage(b.producer, b.config.Topic, result); err != nil {
 		return errors.Trace(err)
 	}
 	return nil
 }
 
-func (h *Broker) useStoredOffsetIfExists(partition int32, offset int64) (int64, error) {
-	offsetByte, err := h.offsetStore.Get(h.config.Topic, partition)
+func (b *Broker) useStoredOffsetIfExists(partition int32, offset int64) (int64, error) {
+	offsetByte, err := b.offsetStore.Get(b.config.Topic, partition)
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
@@ -104,10 +104,10 @@ func (h *Broker) useStoredOffsetIfExists(partition int32, offset int64) (int64, 
 	return offset, nil
 }
 
-func (h *Broker) Consume(f func(msg *sarama.ConsumerMessage) error) error {
+func (b *Broker) Consume(f func(msg *sarama.ConsumerMessage) error) error {
 	offsetGetter := func(partition int32) (offset int64, err error) {
-		offset = h.config.GetOffset()
-		offset, err = h.useStoredOffsetIfExists(partition, offset)
+		offset = b.config.GetOffset()
+		offset, err = b.useStoredOffsetIfExists(partition, offset)
 		if err != nil {
 			return 0, errors.Trace(err)
 		}
@@ -118,11 +118,11 @@ func (h *Broker) Consume(f func(msg *sarama.ConsumerMessage) error) error {
 		if err := f(msg); err != nil {
 			return errors.Trace(err)
 		}
-		if err := h.offsetStore.Put(msg.Topic, msg.Partition, msg.Offset); err != nil {
+		if err := b.offsetStore.Put(msg.Topic, msg.Partition, msg.Offset); err != nil {
 			return errors.Trace(err)
 		}
 		return nil
 	}
 
-	return Consume(h.config.Addrs, h.config.Topic, offsetGetter, consumer)
+	return Consume(b.config.Addrs, b.config.Topic, offsetGetter, consumer)
 }
