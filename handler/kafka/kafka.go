@@ -31,12 +31,12 @@ func (c *Config) GetOffset() int64 {
 }
 
 // Broker example:
-//		handler, err := New(brokerConfig)
-//		handler.SetEventMarshaller(...)
-//		go handler.Consume(func(msg *sarama.ConsumerMessage) error {
+//		broker, err := New(brokerConfig)
+//		broker.SetEventMarshaller(...)
+//		go broker.Consume(func(msg *sarama.ConsumerMessage) error {
 //			// consume your event
 //		})
-//		go river.New(riverConfig).SetEventMarshaller(handler).Sync(river.FromFile)
+//      go broker.Pipe(river.River, river.FromFile)
 type Broker struct {
 	config *Config
 
@@ -112,6 +112,15 @@ func (b *Broker) useStoredOffsetIfExists(partition int32, offset int64) (int64, 
 	return offset, nil
 }
 
+// Pipe 将river中的数据流向kafka
+func (b *Broker) Pipe(river *river.River, from river.From) error {
+	if err := river.SetHandler(b).Sync(from); err != nil {
+		return errors.Trace(err)
+	}
+	return nil
+}
+
+// Consume 消费kafka中的数据
 func (b *Broker) Consume(f func(msg *sarama.ConsumerMessage) error) error {
 	offsetGetter := func(partition int32) (offset int64, err error) {
 		offset = b.config.GetOffset()
