@@ -30,12 +30,19 @@ func (c *Config) GetOffset() int64 {
 	return *c.Offset
 }
 
+// Broker example:
+//		handler, err := New(brokerConfig)
+//		handler.SetEventMarshaller(...)
+//		go handler.Consume(func(msg *sarama.ConsumerMessage) error {
+//			// consume your event
+//		})
+//		go river.New(riverConfig).SetEventMarshaller(handler).Sync(river.FromFile)
 type Broker struct {
 	config *Config
 
 	offsetStore *Offset
 
-	eventHandler func(event *river.EventData) ([]byte, error)
+	eventMarshaller func(event *river.EventData) ([]byte, error)
 
 	producer sarama.SyncProducer
 
@@ -62,16 +69,17 @@ func New(config *Config) (*Broker, error) {
 		return nil, errors.Trace(err)
 	}
 	h := &Broker{
-		config:       config,
-		offsetStore:  offset,
-		producer:     producer,
-		eventHandler: river.Event2Bytes,
+		config:          config,
+		offsetStore:     offset,
+		producer:        producer,
+		eventMarshaller: river.Event2Bytes,
 	}
 	return h, nil
 }
 
-func (b *Broker) SetHandler(eventHandler func(event *river.EventData) ([]byte, error)) {
-	b.eventHandler = eventHandler
+func (b *Broker) SetEventMarshaller(eventMarshaller func(event *river.EventData) ([]byte, error)) *Broker {
+	b.eventMarshaller = eventMarshaller
+	return b
 }
 
 func (b *Broker) String() string {
@@ -79,7 +87,7 @@ func (b *Broker) String() string {
 }
 
 func (b *Broker) OnEvent(event *river.EventData) error {
-	result, err := b.eventHandler(event)
+	result, err := b.eventMarshaller(event)
 	if err != nil {
 		return errors.Trace(err)
 	}
