@@ -30,23 +30,43 @@ func (c *Config) GetOffset() int64 {
 	return *c.Offset
 }
 
+type BrokerHandler interface {
+	String() string
+	Marshal(event *river.EventData) ([]byte, error)
+	OnAlert(msg *river.StatusMsg) error
+	OnClose(river *river.River)
+}
+
+type DefaultHandler struct{}
+
+func (h *DefaultHandler) String() string {
+	return "kafka broker default handler"
+}
+func (h *DefaultHandler) Marshal(event *river.EventData) ([]byte, error) {
+	return river.Event2Bytes(event)
+}
+func (h *DefaultHandler) OnAlert(msg *river.StatusMsg) error {
+	river.Logger.Warnf("%+v", *msg)
+	return nil
+}
+func (h *DefaultHandler) OnClose(r *river.River) {
+	river.Logger.Errorf("%+v", r.Error.Error())
+}
+
+// Broker 实现了 river.Handler 中的核心函数 OnEvent, 添加了校验, offset自动存储功能。
+// 其余 String()、OnAlert()、OnClose() 函数委托给 BrokerHandler 实现。
 // Broker example:
 //		broker, err := New(brokerConfig)
-//		broker.SetEventMarshaller(...)
+//		broker.SetHandler(...)
 //		go broker.Consume(func(msg *sarama.ConsumerMessage) error {
 //			// consume your event
 //		})
-//      go broker.Pipe(river.River, river.FromFile)
+//      err := broker.Pipe(river.River, river.FromFile)
 type Broker struct {
-	config *Config
-
+	config      *Config
 	offsetStore *Offset
-
-	eventMarshaller func(event *river.EventData) ([]byte, error)
-
-	producer sarama.SyncProducer
-
-	river.NopCloserAlerter
+	producer    sarama.SyncProducer
+	BrokerHandler
 }
 
 var _ river.Handler = (*Broker)(nil)
@@ -69,25 +89,21 @@ func New(config *Config) (*Broker, error) {
 		return nil, errors.Trace(err)
 	}
 	h := &Broker{
-		config:          config,
-		offsetStore:     offset,
-		producer:        producer,
-		eventMarshaller: river.Event2Bytes,
+		config:        config,
+		offsetStore:   offset,
+		producer:      producer,
+		BrokerHandler: &DefaultHandler{},
 	}
 	return h, nil
 }
 
-func (b *Broker) SetEventMarshaller(eventMarshaller func(event *river.EventData) ([]byte, error)) *Broker {
-	b.eventMarshaller = eventMarshaller
+func (b *Broker) SetHandler(handler BrokerHandler) *Broker {
+	b.BrokerHandler = handler
 	return b
 }
 
-func (b *Broker) String() string {
-	return "kafka"
-}
-
 func (b *Broker) OnEvent(event *river.EventData) error {
-	result, err := b.eventMarshaller(event)
+	result, err := b.Marshal(event)
 	if err != nil {
 		return errors.Trace(err)
 	}

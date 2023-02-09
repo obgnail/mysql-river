@@ -48,7 +48,7 @@ func Kafka() {
 			msg.Partition, msg.Offset, string(msg.Key), string(msg.Value))
 		return nil
 	})
-	err = river.New(config).SetHandler(handler).Sync(river.FromFile)
+	err = handler.Pipe(river.New(config), river.FromFile)
 	PanicIfError(err)
 }
 
@@ -94,7 +94,7 @@ func Base() {
 
 func main() {
 	//Base()
-	TraceLog()
-	//Kafka()
+	//TraceLog()
+	Kafka()
 	//ElasticSearch()
 }
